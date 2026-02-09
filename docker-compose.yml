@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # Redis service for caching and Celery broker
+  redis:
+    image: redis:7-alpine
+    container_name: 3d-generator-redis
+    ports:
+      - "9501:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - 3d-generator-network
+
+  # Celery worker service for background tasks
+  celery-worker:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: 3d-generator-celery-worker
+    command: celery -A app.worker worker --loglevel=info
+    volumes:
+      - ./Backend:/app
+      - ./uploads:/app/uploads
+      - ./generated:/app/generated
+    environment:
+      - REDIS_URL=redis://redis:9501/0
+      - CELERY_BROKER_URL=redis://redis:9501/0
+      - CELERY_RESULT_BACKEND=redis://redis:9501/0
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+    networks:
+      - 3d-generator-network
+
+  # Celery beat service for scheduled tasks
+  celery-beat:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: 3d-generator-celery-beat
+    command: celery -A app.worker beat --loglevel=info
+    volumes:
+      - ./Backend:/app
+    environment:
+      - REDIS_URL=redis://redis:9501/0
+      - CELERY_BROKER_URL=redis://redis:9501/0
+      - CELERY_RESULT_BACKEND=redis://redis:9501/0
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+    networks:
+      - 3d-generator-network
+
+  # FastAPI backend service
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: 3d-generator-backend
+    ports:
+      - "9502:8000"
+    volumes:
+      - ./Backend:/app
+      - ./uploads:/app/uploads
+      - ./generated:/app/generated
+    environment:
+      - REDIS_URL=redis://redis:9501/0
+      - CELERY_BROKER_URL=redis://redis:9501/0
+      - CELERY_RESULT_BACKEND=redis://redis:9501/0
+      - PYTHONPATH=/app
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - 3d-generator-network
+
+  # React frontend service
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+    container_name: 3d-generator-frontend
+    ports:
+      - "9503:3000"
+    volumes:
+      - ./Frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - NODE_ENV=development
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - 3d-generator-network
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  3d-generator-network:
+    driver: bridge
