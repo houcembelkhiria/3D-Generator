@@ -29,23 +29,23 @@ const StepItem: React.FC<StepItemProps> = ({
       isActive 
         ? 'bg-[#FF8C66]/10 border-[#FF8C66] shadow-lg shadow-[#FF8C66]/10' 
         : isCompleted 
-          ? 'bg-zinc-900/80 border-[#7C3AED]/50' 
-          : 'bg-[#0A0A0A] border-zinc-800 opacity-60'
+          ? 'bg-[var(--bg-tertiary)] border-[#7C3AED]/50' 
+          : 'bg-[var(--bg-card)] border-theme opacity-60'
     }`}>
       <div className={`flex items-center justify-center w-12 h-12 rounded-lg mr-4 ${
         isActive 
           ? 'bg-[#FF8C66] text-black animate-pulse' 
           : isCompleted 
             ? 'bg-[#7C3AED] text-white' 
-            : 'bg-zinc-800 text-zinc-500'
+            : 'bg-[var(--bg-input)] text-theme-muted'
       }`}>
         <Icon className="w-6 h-6" />
       </div>
       <div className="flex-1">
-        <h3 className={`font-bold ${isActive ? 'text-[#FF8C66]' : isCompleted ? 'text-[#7C3AED]' : 'text-zinc-400'}`}>
+        <h3 className={`font-bold ${isActive ? 'text-[#FF8C66]' : isCompleted ? 'text-[#7C3AED]' : 'text-theme-muted'}`}>
           {title}
         </h3>
-        <p className="text-xs text-zinc-500 mt-1">{description}</p>
+        <p className="text-xs text-theme-muted mt-1">{description}</p>
       </div>
       <div className="ml-2">
         {isActive && <IconLoader className="w-5 h-5 text-[#FF8C66] animate-spin" />}

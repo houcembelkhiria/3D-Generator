@@ -4,6 +4,8 @@ import { PipelineVisualizer } from './components/PipelineVisualizer';
 import { Terminal } from './components/Terminal';
 import { StatusBadge } from './components/StatusBadge';
 import { Sidebar } from './components/Sidebar';
+import { FilesTreatment } from './components/FilesTreatment';
+import { ThemeToggle } from './components/ThemeToggle';
 import { IconUpload, IconBox, IconCpu, IconDatabase, IconSettings, IconActivity, IconCheckCircle, IconMessageSquare, IconPaperclip, IconX, IconFileText } from './components/Icons';
 
 // Mock Data for "Step B: Extraction"
@@ -26,12 +28,13 @@ const MOCK_EXTRACTED_METADATA_VISUAL: AssetMetadata = {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'dashboard' | 'settings'>('dashboard');
+  const [activeView, setActiveView] = useState<'agent' | 'files' | 'settings'>('agent');
   const [currentStep, setCurrentStep] = useState<PipelineStep>(PipelineStep.IDLE);
   const [logs, setLogs] = useState<ProcessLog[]>([]);
   const [metadata, setMetadata] = useState<AssetMetadata | null>(null);
   const [promptText, setPromptText] = useState('');
   const [files, setFiles] = useState<string[]>([]);
+  const [extractedText, setExtractedText] = useState<string>('');
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     gpuVramUsage: 14.2,
     gpuTotalVram: 24.0,
@@ -50,6 +53,16 @@ export default function App() {
     };
     setLogs(prev => [...prev, newLog]);
   }, [currentStep]);
+
+  const handleTextExtracted = useCallback((text: string) => {
+    setExtractedText(text);
+    addLog(`Text extracted from file. Length: ${text.length} characters.`, 'success');
+  }, [addLog]);
+
+  const clearLogs = useCallback(() => {
+    setLogs([]);
+    addLog("Logs cleared", 'info');
+  }, [addLog]);
 
   // VRAM Fluctuation Simulation
   useEffect(() => {
@@ -79,8 +92,11 @@ export default function App() {
   const handleProcess = (method: GenerationMethod) => {
     if (currentStep !== PipelineStep.IDLE && currentStep !== PipelineStep.COMPLETED && currentStep !== PipelineStep.ERROR) return;
 
-    if (!promptText.trim() && files.length === 0) {
-      addLog("Erreur: Veuillez entrer un prompt ou attacher un fichier.", 'error');
+    // Check if we have extracted text from PDF or user prompt
+    const hasValidInput = extractedText.trim() || promptText.trim() || files.length > 0;
+    
+    if (!hasValidInput) {
+      addLog("Erreur: Veuillez entrer un prompt, extraire du texte d'un PDF ou attacher un fichier.", 'error');
       return;
     }
 
@@ -92,13 +108,16 @@ export default function App() {
 
     addLog(`🚀 Architecture PFE chargée. Pipeline démarré pour méthode: ${method}`, 'success');
     
-    // Ingestion Logic
-    if (files.length > 0) {
+    // Ingestion Logic - prioritize extracted text from PDF
+    if (extractedText.trim()) {
+      addLog(`Ingestion de texte extrait d'un PDF (${extractedText.length} caractères)...`, 'info');
+      addLog("Contenu: \"" + extractedText.substring(0, 40) + (extractedText.length > 40 ? '...' : '') + "\"", 'info');
+    } else if (files.length > 0) {
        addLog(`Ingestion de ${files.length} fichier(s) attaché(s)...`, 'info');
        files.forEach(f => addLog(`Lecture: ${f}`, 'info'));
     }
     
-    if (promptText.trim()) {
+    if (promptText.trim() && !extractedText.trim()) {
        addLog("Ingestion du prompt textuel utilisateur...", 'info');
        addLog(`Contenu: "${promptText.substring(0, 40)}${promptText.length > 40 ? '...' : ''}"`, 'info');
     }
@@ -164,30 +183,32 @@ export default function App() {
 
   const getPageTitle = () => {
     switch(activeView) {
-      case 'dashboard': return 'Operations Dashboard';
+      case 'agent': return 'Agent Operations';
+      case 'files': return 'Files Treatment';
       case 'settings': return 'System Configuration';
-      default: return 'Dashboard';
+      default: return 'Agent Operations';
     }
   };
 
   const isProcessing = currentStep !== PipelineStep.IDLE && currentStep !== PipelineStep.COMPLETED && currentStep !== PipelineStep.ERROR;
 
   return (
-    <div className="min-h-screen flex bg-[#020408] text-zinc-200 overflow-hidden">
+    <div className="min-h-screen flex bg-theme-primary text-theme-primary overflow-hidden">
       <Sidebar activeView={activeView} onViewChange={setActiveView} />
 
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
         {/* HEADER */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center bg-[#0A0A0A] p-6 border-b border-zinc-800 backdrop-blur-sm z-10">
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center bg-theme-secondary p-6 border-b border-theme backdrop-blur-sm z-10">
           <div>
             <h1 className="text-2xl font-bold bg-gradient-to-r from-[#FF8C66] via-[#FF5F6D] to-[#7C3AED] bg-clip-text text-transparent">
               {getPageTitle()}
             </h1>
-            <p className="text-zinc-400 mt-1 font-mono text-xs">
+            <p className="text-theme-muted mt-1 font-mono text-xs">
               Microservice d'IA Agentique &rarr; Unity MCP
             </p>
           </div>
-          <div className="flex flex-wrap gap-3 mt-4 md:mt-0">
+          <div className="flex flex-wrap gap-3 mt-4 md:mt-0 items-center">
+            <ThemeToggle />
             <StatusBadge 
               label="GPU VRAM" 
               status={systemStatus.gpuVramUsage > 20 ? 'busy' : 'online'} 
@@ -206,31 +227,31 @@ export default function App() {
         </header>
 
         {/* CONTENT SCROLLABLE AREA */}
-        <main className="flex-1 overflow-y-auto p-6 scrollbar-hide">
+        <main className="flex-1 overflow-y-auto p-6 scrollbar-hide bg-theme-primary">
           
-          {/* VIEW: DASHBOARD */}
-          {activeView === 'dashboard' && (
+          {/* VIEW: AGENT */}
+          {activeView === 'agent' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pb-6">
               {/* LEFT COLUMN: CONTROL & INPUT */}
               <section className="lg:col-span-3 space-y-6">
-                <div className="bg-[#0A0A0A] p-6 rounded-2xl border border-zinc-800 h-full flex flex-col">
-                  <h2 className="text-lg font-bold text-white mb-4 flex items-center">
+                <div className="card p-6 h-full flex flex-col">
+                  <h2 className="text-lg font-bold text-heading mb-4 flex items-center">
                     <IconMessageSquare className="mr-2 text-[#FF8C66]" /> Input Request
                   </h2>
                   
                   <div className="flex-1 flex flex-col justify-end">
-                    <p className="text-zinc-500 text-sm mb-4">
+                    <p className="text-muted text-sm mb-4">
                       Describe the asset you want to generate or attach technical specifications (PDF, EML).
                     </p>
 
                     {/* Chat Input Container */}
-                    <div className={`bg-zinc-900/50 border rounded-xl transition-all ${isProcessing ? 'border-zinc-800 opacity-50' : 'border-zinc-700 focus-within:ring-1 focus-within:ring-[#FF8C66] focus-within:border-[#FF8C66]'}`}>
+                    <div className={`input-container transition-all ${isProcessing ? 'opacity-50' : 'focus-within:ring-1 focus-within:ring-[#FF8C66] focus-within:border-[#FF8C66]'}`}>
                         
                         {/* Attached Files Display */}
                         {files.length > 0 && (
                           <div className="px-3 pt-3 flex flex-wrap gap-2">
                             {files.map((f, i) => (
-                              <div key={i} className="flex items-center gap-2 bg-zinc-800 px-2 py-1 rounded-md text-xs text-zinc-300 border border-zinc-700 animate-fadeIn">
+                              <div key={i} className="flex items-center gap-2 bg-theme-input px-2 py-1 rounded-md text-xs text-theme-secondary border border-theme-secondary animate-fadeIn">
                                 <IconFileText className="w-3 h-3 text-[#7C3AED]" />
                                 <span className="max-w-[150px] truncate">{f}</span>
                                 <button onClick={() => removeFile(i)} className="hover:text-red-400 transition-colors" disabled={isProcessing}>
@@ -242,7 +263,7 @@ export default function App() {
                         )}
 
                         <textarea
-                          className="w-full bg-transparent border-none text-sm text-zinc-200 placeholder-zinc-600 focus:ring-0 p-3 resize-none"
+                          className="w-full bg-transparent border-none text-sm text-theme-secondary placeholder-text-muted focus:ring-0 p-3 resize-none"
                           rows={4}
                           placeholder="Type your prompt here... (e.g. 'A futuristic vending machine')"
                           value={promptText}
@@ -251,12 +272,12 @@ export default function App() {
                         />
                         
                         {/* Toolbar */}
-                        <div className="flex items-center justify-between px-2 pb-2 border-t border-zinc-800/50 pt-2 mx-2">
+                        <div className="flex items-center justify-between px-2 pb-2 border-t border-theme pt-2 mx-2">
                           <div className="flex gap-1">
                               <button 
                                 onClick={addMockFile}
                                 disabled={isProcessing}
-                                className="p-2 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="p-2 text-theme-muted hover:text-theme-secondary hover:bg-theme-input rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 title="Attach File"
                               >
                                 <IconPaperclip className="w-5 h-5" />
@@ -284,7 +305,7 @@ export default function App() {
                         </div>
                     </div>
 
-                    <div className="mt-4 text-[10px] text-zinc-600 font-mono text-center">
+                    <div className="mt-4 text-[10px] text-theme-muted font-mono text-center">
                       AI Model: Llama-3-8B-Instruct (Local)
                     </div>
                   </div>
@@ -293,8 +314,8 @@ export default function App() {
 
               {/* MIDDLE COLUMN: PIPELINE VIZ */}
               <section className="lg:col-span-5 space-y-6 flex flex-col">
-                <div className="bg-[#0A0A0A] p-6 rounded-2xl border border-zinc-800">
-                  <h2 className="text-lg font-bold text-white mb-6 flex items-center justify-between">
+                <div className="card p-6">
+                  <h2 className="text-lg font-bold text-heading mb-6 flex items-center justify-between">
                     <span>Pipeline Status</span>
                     {currentStep !== PipelineStep.IDLE && currentStep !== PipelineStep.COMPLETED && (
                       <span className="text-xs font-mono text-[#FF8C66] animate-pulse">PROCESSING...</span>
@@ -304,33 +325,33 @@ export default function App() {
                 </div>
 
                 <div className="flex-1 min-h-[300px]">
-                  <Terminal logs={logs} />
+                  <Terminal logs={logs} onClear={clearLogs} />
                 </div>
               </section>
 
               {/* RIGHT COLUMN: PREVIEW */}
               <section className="lg:col-span-4 space-y-6">
-                <div className="bg-[#0A0A0A] p-6 rounded-2xl border border-zinc-800 h-full flex flex-col">
-                  <h2 className="text-lg font-bold text-white mb-4 flex items-center">
+                <div className="card p-6 h-full flex flex-col">
+                  <h2 className="text-lg font-bold text-heading mb-4 flex items-center">
                     <IconDatabase className="mr-2 text-[#7C3AED]" /> Extracted Metadata
                   </h2>
                   
                   {metadata ? (
                     <div className="flex-1 space-y-4">
-                      <div className="bg-black/40 p-4 rounded-xl border border-zinc-800 font-mono text-xs text-[#7C3AED] overflow-x-auto">
+                      <div className="bg-theme-input p-4 rounded-xl border border-theme font-mono text-xs text-[#7C3AED] overflow-x-auto">
                           <pre>{JSON.stringify(metadata, null, 2)}</pre>
                       </div>
                       
-                      <div className="bg-zinc-900/50 p-4 rounded-xl border border-zinc-800 flex flex-col items-center">
-                          <div className="text-xs text-zinc-400 mb-2 w-full text-left uppercase tracking-wider">Asset Preview</div>
-                          <div className="w-full aspect-square bg-[#050505] rounded-lg flex items-center justify-center border border-zinc-800 relative overflow-hidden group">
+                      <div className="bg-theme-input p-4 rounded-xl border border-theme flex flex-col items-center">
+                          <div className="text-xs text-muted mb-2 w-full text-left uppercase tracking-wider">Asset Preview</div>
+                          <div className="w-full aspect-square bg-theme-secondary rounded-lg flex items-center justify-center border border-theme relative overflow-hidden group">
                             <img 
                               src={`https://picsum.photos/400/400?random=${metadata.name}`} 
                               alt="Asset Preview" 
                               className="opacity-50 grayscale group-hover:grayscale-0 transition-all duration-500"
                             />
                             <div className="absolute inset-0 flex items-center justify-center">
-                                <span className="px-3 py-1 bg-black/80 text-white text-xs rounded border border-white/20 backdrop-blur-md">
+                                <span className="px-3 py-1 bg-theme-primary/80 text-theme-primary text-xs rounded border border-theme backdrop-blur-md">
                                   {metadata.generationMethod === GenerationMethod.PROCEDURAL ? 'C# SCRIPT GENERATED' : '.GLB MESH GENERATED'}
                                 </span>
                             </div>
@@ -338,7 +359,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-zinc-700">
+                    <div className="flex-1 flex flex-col items-center justify-center text-muted">
                       <IconDatabase className="w-16 h-16 mb-4 opacity-20" />
                       <p>No metadata extracted yet.</p>
                       <p className="text-sm">Waiting for pipeline Step B...</p>
@@ -348,23 +369,28 @@ export default function App() {
               </section>
             </div>
           )}
-
+                    
+          {/* VIEW: FILES TREATMENT */}
+          {activeView === 'files' && (
+            <FilesTreatment onTextExtracted={handleTextExtracted} />
+          )}
+                    
           {/* VIEW: SETTINGS */}
           {activeView === 'settings' && (
             <div className="max-w-4xl mx-auto space-y-8">
               
               {/* SYSTEM RESOURCES CARD */}
-              <div className="bg-[#0A0A0A] rounded-2xl border border-zinc-800 overflow-hidden">
-                <div className="p-6 border-b border-zinc-800">
-                  <h2 className="text-xl font-bold text-white flex items-center">
+              <div className="card overflow-hidden">
+                <div className="p-6 border-b border-theme">
+                  <h2 className="text-xl font-bold text-heading flex items-center">
                     <IconSettings className="mr-3 text-[#FF8C66]" /> System Resources
                   </h2>
-                  <p className="text-zinc-400 mt-1">Manage local computation resources and limits.</p>
+                  <p className="text-body mt-1">Manage local computation resources and limits.</p>
                 </div>
                 <div className="p-8 space-y-8">
                   <div className="space-y-4">
                       <div className="flex justify-between items-end">
-                        <label className="text-sm font-semibold text-zinc-300">Total GPU VRAM Limit</label>
+                        <label className="text-sm font-semibold text-theme-secondary">Total GPU VRAM Limit</label>
                         <span className="text-2xl font-mono text-[#FF8C66] font-bold">{systemStatus.gpuTotalVram} GB</span>
                       </div>
                       <input 
@@ -372,13 +398,13 @@ export default function App() {
                           min="8" max="48" step="4" 
                           value={systemStatus.gpuTotalVram}
                           onChange={(e) => updateSystemStatus('gpuTotalVram', parseFloat(e.target.value))}
-                          className="w-full h-3 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-[#FF8C66]"
+                          className="w-full h-3 bg-theme-input rounded-lg appearance-none cursor-pointer accent-[#FF8C66]"
                       />
-                      <div className="flex justify-between text-xs text-zinc-500 font-mono">
+                      <div className="flex justify-between text-xs text-muted font-mono">
                         <span>8 GB (Minimum)</span>
                         <span>48 GB (Dual A10)</span>
                       </div>
-                      <p className="text-xs text-zinc-500 bg-[#FF8C66]/10 p-3 rounded border border-[#FF8C66]/20">
+                      <p className="text-xs text-muted bg-[#FF8C66]/10 p-3 rounded border border-[#FF8C66]/20">
                         ⚠️ Increasing VRAM limit allows larger LLM context windows (e.g. Llama 3 70B) but requires hardware support.
                       </p>
                   </div>
@@ -386,26 +412,26 @@ export default function App() {
               </div>
 
               {/* CONNECTIVITY CARD */}
-              <div className="bg-[#0A0A0A] rounded-2xl border border-zinc-800 overflow-hidden">
-                <div className="p-6 border-b border-zinc-800">
-                   <h2 className="text-xl font-bold text-white flex items-center">
+              <div className="card overflow-hidden">
+                <div className="p-6 border-b border-theme">
+                   <h2 className="text-xl font-bold text-heading flex items-center">
                     <IconActivity className="mr-3 text-[#7C3AED]" /> Service Connectivity
                   </h2>
-                   <p className="text-zinc-400 mt-1">Toggle connections to external microservices.</p>
+                   <p className="text-body mt-1">Toggle connections to external microservices.</p>
                 </div>
                 <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
                    {/* Redis Toggle */}
-                   <div className="flex flex-col space-y-4 p-4 rounded-xl bg-zinc-900/30 border border-zinc-800">
+                   <div className="toggle-card">
                       <div className="flex items-center justify-between">
-                          <span className="font-semibold text-zinc-200">Redis Task Queue</span>
+                          <span className="font-semibold text-heading">Redis Task Queue</span>
                           <button 
                               onClick={() => updateSystemStatus('redisConnected', !systemStatus.redisConnected)}
-                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.redisConnected ? 'bg-[#7C3AED]' : 'bg-zinc-800'}`}
+                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.redisConnected ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
                           >
                               <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.redisConnected ? 'translate-x-6' : 'translate-x-0'}`} />
                           </button>
                       </div>
-                      <p className="text-xs text-zinc-400">
+                      <p className="text-xs text-muted">
                         Handles asynchronous job processing for 3D generation (TripoSR/Shap-E). Essential for non-blocking API responses.
                       </p>
                       <div className="flex items-center text-xs">
@@ -417,17 +443,17 @@ export default function App() {
                    </div>
 
                    {/* MCP Toggle */}
-                   <div className="flex flex-col space-y-4 p-4 rounded-xl bg-zinc-900/30 border border-zinc-800">
+                   <div className="toggle-card">
                       <div className="flex items-center justify-between">
-                          <span className="font-semibold text-zinc-200">Unity MCP Server</span>
+                          <span className="font-semibold text-heading">Unity MCP Server</span>
                           <button 
                               onClick={() => updateSystemStatus('unityMcpConnected', !systemStatus.unityMcpConnected)}
-                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.unityMcpConnected ? 'bg-[#7C3AED]' : 'bg-zinc-800'}`}
+                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.unityMcpConnected ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
                           >
                               <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.unityMcpConnected ? 'translate-x-6' : 'translate-x-0'}`} />
                           </button>
                       </div>
-                      <p className="text-xs text-zinc-400">
+                      <p className="text-xs text-muted">
                         Model Context Protocol connection to Unity Editor. Enables direct scene manipulation tools (Spawn, Transform).
                       </p>
                       <div className="flex items-center text-xs">

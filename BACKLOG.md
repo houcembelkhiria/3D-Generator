@@ -14,7 +14,7 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
 |----|------------|-------------|
 | US-1.1 | [Infra] Setup Docker-Compose | Mise en place de Docker-Compose (FastAPI, Redis, Celery) |
 | US-1.2 | Pipeline unstructured | Implémentation du pipeline unstructured pour parser PDF et Emails (.eml) |
-| US-1.3 | Filtres Regex | Création de filtres Regex pour nettoyer le "bruit" (signatures, headers) |
+| US-1.3 | ✅ Filtres Regex | ✅ Création de filtres Regex pour nettoyer le "bruit" (signatures, headers) |
 | US-1.4 | [API] Endpoint /upload asynchrone | Endpoint qui renvoie un task_id |
 
 ---
@@ -38,7 +38,7 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
 
 | ID | User Story | Description |
 |----|------------|-------------|
-| US-3.1 | Intégration TripoSR | Intégration du modèle TripoSR pour la génération Text-to-Mesh rapide |
+| US-3.1 | ✅ Intégration TripoSR | ✅ Intégration du modèle TripoSR pour la génération Text-to-Mesh rapide |
 | US-3.2 | [IA Code] Scripts C# procéduraux | Pipeline alternatif : génération de scripts C# procéduraux pour les formes géométriques |
 | US-3.3 | Conversion et optimisation | Conversion et optimisation des assets (OBJ vers GLB) |
 | US-3.4 | Stockage temporaire | Gestion du stockage temporaire des fichiers générés |

@@ -2,46 +2,35 @@
 
 This project uses Docker Compose to orchestrate multiple services:
 
-- **FastAPI Backend** (port 8000) - Main API service
-- **React Frontend** (port 3000) - Web dashboard
-- **Redis** (port 6379) - Cache and message broker
+- **FastAPI Backend** (port 9502) - Main API service
+- **React Frontend** (port 9503) - Web dashboard
+- **Redis** (port 9501) - Cache and message broker
 - **Celery Worker** - Background task processing
 - **Celery Beat** - Scheduled task processing
 
 ## Quick Start
 
-1. **Build and start all services:**
+### Development Mode (with live reloading)
 ```bash
+# Build and start all services with volume mounts for development
 docker-compose up --build
 ```
 
-2. **Start in detached mode:**
+### Production Mode (fully containerized)
 ```bash
-docker-compose up -d
+# Build and start all services with code baked into containers
+docker-compose -f docker-compose.prod.yml up --build
 ```
 
-3. **View logs:**
-```bash
-docker-compose logs -f
-```
-
-4. **Stop all services:**
-```bash
-docker-compose down
-```
-
-5. **Stop and remove volumes:**
-```bash
-docker-compose down -v
-```
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed differences between deployment options.
 
 ## Service URLs
 
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **Redis**: localhost:6379
+- **Frontend**: http://localhost:9503
+- **Backend API**: http://localhost:9502
+- **API Docs**: http://localhost:9502/docs
+- **ReDoc**: http://localhost:9502/redoc
+- **Redis**: localhost:9501
 
 ## Development Commands
 

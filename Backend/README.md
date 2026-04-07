@@ -27,6 +27,13 @@ uvicorn app.main:app --reload
 celery -A app.worker worker --loglevel=info
 ```
 
+## API Endpoints
+
+- `POST /api/v1/upload` - Upload document for 3D generation
+- `GET /api/v1/task/{task_id}` - Check task status
+- `GET /api/v1/models` - List generated 3D models
+- `POST /api/v1/extract-text/` - Extract text from PDF files
+
 ## API Documentation
 
 - Swagger UI: http://localhost:8000/docs

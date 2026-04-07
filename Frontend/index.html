@@ -5,20 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MCP 3D Agent - PFE Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              theme: {
+                primary: 'var(--bg-primary)',
+                secondary: 'var(--bg-secondary)',
+                card: 'var(--bg-card)',
+                input: 'var(--bg-input)',
+              },
+              text: {
+                primary: 'var(--text-primary)',
+                secondary: 'var(--text-secondary)',
+                muted: 'var(--text-tertiary)',
+              },
+              border: {
+                theme: 'var(--border-primary)',
+                secondary: 'var(--border-secondary)',
+              },
+              accent: {
+                primary: 'var(--accent-primary)',
+                secondary: 'var(--accent-secondary)',
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="/tailwind.css">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #020408;
-        color: #e2e8f0;
+        transition: background-color 0.3s ease, color 0.3s ease;
       }
+      
       .font-mono {
         font-family: 'JetBrains Mono', monospace;
       }
+      
       /* Custom scrollbar for logs */
       .scrollbar-hide::-webkit-scrollbar {
           display: none;
       }
+      
       .scrollbar-hide {
           -ms-overflow-style: none;
           scrollbar-width: none;
@@ -33,7 +66,6 @@
   }
 }
 </script>
-<link rel="stylesheet" href="/index.css">
 </head>
   <body>
     <div id="root"></div>

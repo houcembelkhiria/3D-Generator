@@ -13,9 +13,29 @@ redis==5.0.1
 
 # File Processing
 python-magic==0.4.27
+pypdf==3.17.0
+unstructured==0.10.10
+unstructured[pdf]==0.10.10
+unstructured[email]==0.10.10
+
+# LLM Integration
+llama-cpp-python==0.2.56
+transformers==4.38.0
+torch==2.1.0
+
+# 3D Generation
+trimesh==4.0.5
+numpy==1.24.3
+Pillow==9.5.0
+opencv-python==4.8.1.78
+scipy==1.11.4
+
+# 3D File Formats
+pygltflib==1.16.2
 
 # Utilities
 python-dotenv==1.0.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 requests==2.31.0
+reportlab==4.0.4  # For testing PDF generation
