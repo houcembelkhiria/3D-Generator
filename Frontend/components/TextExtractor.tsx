@@ -1,4 +1,5 @@
 import React, { useState, useRef, ChangeEvent, useEffect } from 'react';
+import { API_BASE } from '../api';
 
 interface TextExtractionResult {
   filename: string;
@@ -134,7 +135,7 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
         setProgress(prev => Math.min(prev + 10, 90));
       }, 200);
 
-      const response = await fetch('http://localhost:9502/api/v1/extract-text/', {
+      const response = await fetch(`${API_BASE}/api/v1/extract-text/`, {
         method: 'POST',
         body: formData,
       });
@@ -207,7 +208,7 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
           <div 
             className={`flex flex-col items-center justify-center p-8 border-2 rounded-xl transition-all duration-200 ${
               dragActive 
-                ? 'border-[#7C3AED] bg-[#7C3AED]/10 scale-105' 
+                ? 'border-[#FF8C66] bg-[#FF8C66]/10 scale-105' 
                 : 'border-dashed border-theme-secondary bg-[var(--bg-input)] hover:bg-[var(--bg-hover)]'
             }`}
             onDrop={handleDrop}
@@ -216,26 +217,26 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
             onDragLeave={handleDrag}
           >
             <div className="relative">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 text-zinc-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 text-theme-muted mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
               {dragActive && (
-                <div className="absolute inset-0 flex items-center justify-center bg-[#7C3AED]/20 rounded-full">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-[#7C3AED]" viewBox="0 0 20 20" fill="currentColor">
+                <div className="absolute inset-0 flex items-center justify-center bg-[#FF8C66]/20 rounded-full">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-[#FF8C66]" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 012 0v11.586l4.293-4.293a1 1 0 011.414 0z" clipRule="evenodd" />
                   </svg>
                 </div>
               )}
             </div>
-            <p className="text-zinc-700 dark:text-zinc-400 mb-2 font-medium">Drag & drop your PDF or EML file here</p>
-            <p className="text-zinc-500 dark:text-zinc-500 text-sm mb-1">or</p>
+            <p className="text-theme-secondary mb-2 font-medium">Drag & drop your PDF or EML file here</p>
+            <p className="text-theme-muted text-sm mb-1">or</p>
             <button
               onClick={triggerFileSelect}
-              className="px-6 py-3 bg-gradient-to-r from-[#7C3AED] to-[#6d28d9] hover:from-[#6d28d9] hover:to-[#5b21b6] text-white rounded-lg transition-all duration-200 font-medium shadow-lg shadow-[#7C3AED]/20 hover:shadow-[#7C3AED]/30 transform hover:-translate-y-0.5"
+              className="px-6 py-3 bg-[#FF8C66] hover:bg-[#ff7a4d] text-black rounded-lg transition-all duration-200 font-medium shadow-lg shadow-[#FF8C66]/20 hover:shadow-[#FF8C66]/30 transform hover:-translate-y-0.5"
             >
               Browse Files
             </button>
-            <p className="text-zinc-500 dark:text-zinc-500 text-xs mt-4">Supports PDF and EML files up to 50MB</p>
+            <p className="text-theme-muted text-xs mt-4">Supports PDF and EML files up to 50MB</p>
             <input
               type="file"
               ref={fileInputRef}
@@ -254,13 +255,13 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                       <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
                     </svg>
                     <div>
-                      <span className="text-sm font-mono truncate max-w-[180px] block text-zinc-900 dark:text-zinc-200">{file.name}</span>
-                      <span className="text-xs text-zinc-600 dark:text-zinc-400">{formatFileSize(file.size)}</span>
+                      <span className="text-sm font-mono truncate max-w-[180px] block text-heading">{file.name}</span>
+                      <span className="text-xs text-theme-muted">{formatFileSize(file.size)}</span>
                     </div>
                   </div>
                   <button
                     onClick={handleReset}
-                    className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                    className="text-theme-muted hover:text-theme-primary transition-colors"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -270,13 +271,13 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                 
                 {isLoading && (
                   <div className="mb-4">
-                    <div className="flex justify-between text-sm text-zinc-400 mb-1">
+                    <div className="flex justify-between text-sm text-theme-muted mb-1">
                       <span>Processing document...</span>
                       <span>{progress}%</span>
                     </div>
                     <div className="w-full bg-[var(--bg-input)] rounded-full h-2">
                       <div 
-                        className="bg-gradient-to-r from-[#7C3AED] to-[#6d28d9] h-2 rounded-full transition-all duration-300"
+                        className="bg-[#FF8C66] h-2 rounded-full transition-all duration-300"
                         style={{ width: `${progress}%` }}
                       ></div>
                     </div>
@@ -289,8 +290,8 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                     disabled={isLoading}
                     className={`px-6 py-2.5 rounded-lg transition-all duration-200 flex items-center font-medium ${
                       isLoading
-                        ? 'bg-gray-600 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-[#7C3AED] to-[#6d28d9] hover:from-[#6d28d9] hover:to-[#5b21b6] text-white shadow-lg shadow-[#7C3AED]/20 hover:shadow-[#7C3AED]/30 transform hover:-translate-y-0.5'
+                        ? 'bg-[var(--bg-hover)] cursor-not-allowed text-theme-muted'
+                        : 'bg-[#FF8C66] hover:bg-[#ff7a4d] text-black shadow-lg shadow-[#FF8C66]/20 hover:shadow-[#FF8C66]/30 transform hover:-translate-y-0.5'
                     }`}
                   >
                     {isLoading ? (
@@ -322,7 +323,7 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                   </svg>
                   <span className="font-medium">Error</span>
                 </div>
-                <p className="mt-1 text-sm text-red-300">{error}</p>
+                <p className="mt-1 text-sm text-red-400">{error}</p>
               </div>
             )}
 
@@ -338,16 +339,16 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                     </div>
                     <button
                       onClick={handleClearResult}
-                      className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                      className="text-theme-muted hover:text-theme-primary transition-colors"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                         <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                       </svg>
                     </button>
                   </div>
-                  <p className="mt-2 text-sm text-green-300">File: {result.filename}</p>
+                  <p className="mt-2 text-sm text-green-400">File: {result.filename}</p>
                   {result.message && (
-                    <p className="mt-1 text-sm text-yellow-300 italic">{result.message}</p>
+                    <p className="mt-1 text-sm text-yellow-400 italic">{result.message}</p>
                   )}
                 </div>
 
@@ -401,7 +402,7 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                       </div>
                     </div>
                     <div className="bg-[var(--bg-tertiary)] p-4 rounded-xl border border-theme max-h-60 overflow-y-auto">
-                      <pre className="whitespace-pre-wrap text-xs text-zinc-300 font-mono leading-relaxed">
+                      <pre className="whitespace-pre-wrap text-xs text-theme-secondary font-mono leading-relaxed">
                         {result.extracted_text}
                       </pre>
                     </div>

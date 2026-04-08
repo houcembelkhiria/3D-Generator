@@ -175,51 +175,48 @@
   
   /* Text colors */
   .text-heading {
-    color: var(--text-primary);
+    color: var(--text-primary) !important;
   }
   
   .text-body {
-    color: var(--text-secondary);
+    color: var(--text-secondary) !important;
   }
   
   .text-muted {
-    color: var(--text-tertiary);
+    color: var(--text-tertiary) !important;
   }
 }
 
 @layer utilities {
+  /* Background surfaces */
   .bg-theme-primary {
     background-color: var(--bg-primary);
   }
-  
   .bg-theme-secondary {
     background-color: var(--bg-secondary);
   }
-  
   .bg-theme-card {
     background-color: var(--bg-card);
   }
-  
   .bg-theme-input {
     background-color: var(--bg-input);
   }
-  
+
+  /* Text colors — use these instead of text-zinc-* */
   .text-theme-primary {
-    color: var(--text-primary);
+    color: var(--text-primary) !important;
   }
-  
   .text-theme-secondary {
-    color: var(--text-secondary);
+    color: var(--text-secondary) !important;
   }
-  
   .text-theme-muted {
-    color: var(--text-tertiary);
+    color: var(--text-tertiary) !important;
   }
-  
+
+  /* Border colors */
   .border-theme {
     border-color: var(--border-primary);
   }
-  
   .border-theme-secondary {
     border-color: var(--border-secondary);
   }

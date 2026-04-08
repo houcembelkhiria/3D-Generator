@@ -62,6 +62,10 @@ cd Backend && celery -A app.worker beat --loglevel=info
 - `GET /api/v1/models` — List generated 3D models
 - `GET /health` — Health check
 
-## Integration: Hunyuan3D-2GP
+## 3D Generation (hy3dgen)
 
-The `Hunyuan3D-2GP/` directory contains a separate 3D generation model (text-to-image, shape generation, texture generation). It has its own API server (`api_server.py`) and Gradio app.
+The `Backend/hy3dgen/` package contains the Hunyuan3D model pipeline (shape generation, texture generation, text-to-image). All 3D generation is served through the Backend API at `/api/v1/image-to-3d`, `/api/v1/text-to-3d`, `/api/v1/multiview-to-3d`.
+
+## Vector Cache (ChromaDB)
+
+The Backend uses a ChromaDB vector store (`Backend/generated/vector_store/`) to cache 3D generation results by CLIP/DINO image embedding similarity. When a new request arrives, the embedding is compared against stored embeddings (cosine similarity >= 0.95). Cache hits return instantly. Different generation parameters produce separate cache entries. API: `/api/v1/cache-stats`, `/api/v1/similar-models`.

@@ -20,22 +20,46 @@ unstructured[email]==0.10.10
 
 # LLM Integration
 llama-cpp-python==0.2.56
-transformers==4.38.0
-torch==2.1.0
+transformers==4.49.0
+torch>=2.1.0
+torchvision
 
-# 3D Generation
+# 3D Generation (Hunyuan3D / hy3dgen)
+diffusers==0.32.1
+einops
+mmgp==3.2.7
+huggingface-hub
+accelerate
+omegaconf
+sentencepiece
+rembg
+onnxruntime
+scikit-image
+tqdm
+
+# Mesh Processing
 trimesh==4.0.5
-numpy==1.24.3
-Pillow==9.5.0
-opencv-python==4.8.1.78
+pymeshlab
+pygltflib==1.16.2
+xatlas
+
+# Image / Numerical
+numpy>=1.24.3
+Pillow>=9.5.0
+opencv-python>=4.8.1.78
 scipy==1.11.4
 
-# 3D File Formats
-pygltflib==1.16.2
+# Build tools (for hy3dgen C++ extensions)
+ninja
+pybind11
 
 # Utilities
 python-dotenv==1.0.0
-pydantic==2.5.0
+pydantic>=2.5.0
 pydantic-settings==2.1.0
 requests==2.31.0
-reportlab==4.0.4  # For testing PDF generation
+reportlab==4.0.4
+psutil
+
+# Vector Cache
+chromadb>=0.5.0

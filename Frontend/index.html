@@ -11,19 +11,22 @@
         theme: {
           extend: {
             colors: {
-              theme: {
+              surface: {
                 primary: 'var(--bg-primary)',
                 secondary: 'var(--bg-secondary)',
+                tertiary: 'var(--bg-tertiary)',
                 card: 'var(--bg-card)',
                 input: 'var(--bg-input)',
+                hover: 'var(--bg-hover)',
               },
-              text: {
+              content: {
                 primary: 'var(--text-primary)',
                 secondary: 'var(--text-secondary)',
-                muted: 'var(--text-tertiary)',
+                tertiary: 'var(--text-tertiary)',
+                muted: 'var(--text-muted)',
               },
-              border: {
-                theme: 'var(--border-primary)',
+              edge: {
+                primary: 'var(--border-primary)',
                 secondary: 'var(--border-secondary)',
               },
               accent: {
@@ -66,6 +69,7 @@
   }
 }
 </script>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
 </head>
   <body>
     <div id="root"></div>

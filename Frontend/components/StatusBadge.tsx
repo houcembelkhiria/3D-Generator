@@ -12,7 +12,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ label, status, value }
       case 'online': return 'bg-[#7C3AED]/10 text-[#7C3AED] border-[#7C3AED]/20';
       case 'offline': return 'bg-red-500/10 text-red-500 border-red-500/20';
       case 'busy': return 'bg-[#FF8C66]/10 text-[#FF8C66] border-[#FF8C66]/20';
-      default: return 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20';
+      default: return 'bg-[var(--bg-input)] text-theme-muted border-theme';
     }
   };
 

@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { PipelineStep, GenerationMethod, AssetMetadata, ProcessLog, SystemStatus } from './types';
+import { PipelineStep, GenerationMethod, AssetMetadata, ProcessLog, SystemStatus, AppView, GeneratedModel } from './types';
 import { PipelineVisualizer } from './components/PipelineVisualizer';
 import { Terminal } from './components/Terminal';
 import { StatusBadge } from './components/StatusBadge';
 import { Sidebar } from './components/Sidebar';
 import { FilesTreatment } from './components/FilesTreatment';
 import { ThemeToggle } from './components/ThemeToggle';
+import { ImageTo3D } from './components/ImageTo3D';
+import { TextTo3D } from './components/TextTo3D';
+import { MultiViewTo3D } from './components/MultiViewTo3D';
+import { ModelGallery } from './components/ModelGallery';
+import { API_BASE } from './api';
 import { IconUpload, IconBox, IconCpu, IconDatabase, IconSettings, IconActivity, IconCheckCircle, IconMessageSquare, IconPaperclip, IconX, IconFileText } from './components/Icons';
 
 // Mock Data for "Step B: Extraction"
@@ -28,7 +33,8 @@ const MOCK_EXTRACTED_METADATA_VISUAL: AssetMetadata = {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState<'agent' | 'files' | 'settings'>('agent');
+  const [activeView, setActiveView] = useState<AppView>('agent');
+  const [generatedModels, setGeneratedModels] = useState<GeneratedModel[]>([]);
   const [currentStep, setCurrentStep] = useState<PipelineStep>(PipelineStep.IDLE);
   const [logs, setLogs] = useState<ProcessLog[]>([]);
   const [metadata, setMetadata] = useState<AssetMetadata | null>(null);
@@ -36,11 +42,15 @@ export default function App() {
   const [files, setFiles] = useState<string[]>([]);
   const [extractedText, setExtractedText] = useState<string>('');
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
-    gpuVramUsage: 14.2,
-    gpuTotalVram: 24.0,
-    redisConnected: true,
-    unityMcpConnected: true,
-    activeWorkers: 0
+    device: 'cpu',
+    ramUsage: 0,
+    ramTotal: 0,
+    vramUsage: 0,
+    vramTotal: 0,
+    hunyuan3dReady: false,
+    hasTexgen: false,
+    hasT2i: false,
+    hasMv: false,
   });
 
   const addLog = useCallback((message: string, type: ProcessLog['type'] = 'info') => {
@@ -64,15 +74,57 @@ export default function App() {
     addLog("Logs cleared", 'info');
   }, [addLog]);
 
-  // VRAM Fluctuation Simulation
+  // Poll real system stats from Backend
   useEffect(() => {
-    const interval = setInterval(() => {
-      setSystemStatus(prev => ({
-        ...prev,
-        gpuVramUsage: Math.min(prev.gpuTotalVram, Math.max(8, prev.gpuVramUsage + (Math.random() - 0.5) * 0.5))
-      }));
-    }, 2000);
+    const fetchStats = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/system-stats`);
+        if (res.ok) {
+          const data = await res.json();
+          setSystemStatus({
+            device: data.device,
+            ramUsage: data.ram_used_gb,
+            ramTotal: data.ram_total_gb,
+            vramUsage: data.vram_used_gb,
+            vramTotal: data.vram_total_gb,
+            hunyuan3dReady: data.hunyuan3d_ready,
+            hasTexgen: data.has_texgen,
+            hasT2i: data.has_t2i,
+            hasMv: data.has_mv,
+          });
+        }
+      } catch { /* Backend not reachable */ }
+    };
+    fetchStats();
+    const interval = setInterval(fetchStats, 10000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Fetch gallery from vector cache DB on mount
+  useEffect(() => {
+    const fetchGallery = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/cache-stats`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.models && data.models.length > 0) {
+            const cached: GeneratedModel[] = data.models.map((m: any) => ({
+              id: m.id,
+              previewUrl: m.previewUrl.startsWith('http') ? m.previewUrl : `${API_BASE}${m.previewUrl}`,
+              downloadUrl: m.downloadUrl.startsWith('http') ? m.downloadUrl : `${API_BASE}${m.downloadUrl}`,
+              format: m.format || 'glb',
+              source: m.source || 'image-to-3d',
+              prompt: m.prompt,
+              createdAt: m.createdAt,
+              fromCache: true,
+              attempt: m.attempt,
+            }));
+            setGeneratedModels(cached);
+          }
+        }
+      } catch { /* Backend not reachable yet */ }
+    };
+    fetchGallery();
   }, []);
 
   const addMockFile = () => {
@@ -132,7 +184,7 @@ export default function App() {
       // STEP B: Brain (LLM)
       setTimeout(() => {
         addLog("Chargement context Llama 3 8B (vLLM local)...", 'warning');
-        addLog(`VRAM Spike détecté: ${(systemStatus.gpuVramUsage + 4).toFixed(1)}GB`, 'warning');
+        addLog(`VRAM Spike détecté: ${(systemStatus.vramUsage + 4).toFixed(1)}GB`, 'warning');
         addLog("Extraction entités nommées (NER) en cours...", 'info');
         addLog("Validation Pydantic schema 'UnityMetadata'...", 'info');
         addLog("JSON Metadata généré avec succès.", 'success');
@@ -177,18 +229,34 @@ export default function App() {
     }, 2000);
   };
 
-  const updateSystemStatus = (key: keyof SystemStatus, value: any) => {
-    setSystemStatus(prev => ({ ...prev, [key]: value }));
-  };
+  
 
   const getPageTitle = () => {
     switch(activeView) {
       case 'agent': return 'Agent Operations';
       case 'files': return 'Files Treatment';
       case 'settings': return 'System Configuration';
+      case 'image-to-3d': return 'Image to 3D';
+      case 'text-to-3d': return 'Text to 3D';
+      case 'multiview-to-3d': return 'Multi-View to 3D';
+      case 'gallery': return 'Model Gallery';
       default: return 'Agent Operations';
     }
   };
+
+  const handleModelGenerated = useCallback((model: GeneratedModel) => {
+    setGeneratedModels(prev => {
+      // Avoid duplicates if cache already has this model
+      const filtered = prev.filter(m => m.id !== model.id);
+      return [model, ...filtered];
+    });
+  }, []);
+
+  const handleModelRemove = useCallback((id: string) => {
+    setGeneratedModels(prev => prev.filter(m => m.id !== id));
+    // Also delete from backend vector cache
+    fetch(`${API_BASE}/api/v1/cache/${id}`, { method: 'DELETE' }).catch(() => {});
+  }, []);
 
   const isProcessing = currentStep !== PipelineStep.IDLE && currentStep !== PipelineStep.COMPLETED && currentStep !== PipelineStep.ERROR;
 
@@ -210,18 +278,19 @@ export default function App() {
           <div className="flex flex-wrap gap-3 mt-4 md:mt-0 items-center">
             <ThemeToggle />
             <StatusBadge 
-              label="GPU VRAM" 
-              status={systemStatus.gpuVramUsage > 20 ? 'busy' : 'online'} 
-              value={`${systemStatus.gpuVramUsage.toFixed(1)} / ${systemStatus.gpuTotalVram} GB`} 
+              label="RAM" 
+              status={systemStatus.ramUsage > systemStatus.ramTotal * 0.85 ? 'busy' : 'online'} 
+              value={`${systemStatus.ramUsage} / ${systemStatus.ramTotal} GB`} 
             />
             <StatusBadge 
-              label="Redis Queue" 
-              status={systemStatus.redisConnected ? 'online' : 'offline'} 
+              label={systemStatus.device === 'mps' ? 'MPS' : systemStatus.device === 'cuda' ? 'VRAM' : 'CPU'} 
+              status={systemStatus.vramUsage > systemStatus.vramTotal * 0.85 ? 'busy' : 'online'} 
+              value={systemStatus.vramTotal > 0 ? `${systemStatus.vramUsage} / ${systemStatus.vramTotal} GB` : 'N/A'} 
             />
             <StatusBadge 
-              label="Unity MCP" 
-              status={systemStatus.unityMcpConnected ? 'online' : 'offline'} 
-              value="CONNECTED" 
+              label="Hunyuan3D" 
+              status={systemStatus.hunyuan3dReady ? 'online' : 'offline'} 
+              value={systemStatus.hunyuan3dReady ? 'READY' : 'LOADING'} 
             />
           </div>
         </header>
@@ -391,13 +460,13 @@ export default function App() {
                   <div className="space-y-4">
                       <div className="flex justify-between items-end">
                         <label className="text-sm font-semibold text-theme-secondary">Total GPU VRAM Limit</label>
-                        <span className="text-2xl font-mono text-[#FF8C66] font-bold">{systemStatus.gpuTotalVram} GB</span>
+                        <span className="text-2xl font-mono text-[#FF8C66] font-bold">{systemStatus.vramTotal} GB</span>
                       </div>
                       <input 
                           type="range" 
                           min="8" max="48" step="4" 
-                          value={systemStatus.gpuTotalVram}
-                          onChange={(e) => updateSystemStatus('gpuTotalVram', parseFloat(e.target.value))}
+                          value={systemStatus.vramTotal}
+                          onChange={() => {}}
                           className="w-full h-3 bg-theme-input rounded-lg appearance-none cursor-pointer accent-[#FF8C66]"
                       />
                       <div className="flex justify-between text-xs text-muted font-mono">
@@ -415,7 +484,7 @@ export default function App() {
               <div className="card overflow-hidden">
                 <div className="p-6 border-b border-theme">
                    <h2 className="text-xl font-bold text-heading flex items-center">
-                    <IconActivity className="mr-3 text-[#7C3AED]" /> Service Connectivity
+                    <IconActivity className="mr-3 text-[#FF8C66]" /> Service Connectivity
                   </h2>
                    <p className="text-body mt-1">Toggle connections to external microservices.</p>
                 </div>
@@ -423,12 +492,12 @@ export default function App() {
                    {/* Redis Toggle */}
                    <div className="toggle-card">
                       <div className="flex items-center justify-between">
-                          <span className="font-semibold text-heading">Redis Task Queue</span>
+                          <span className="font-semibold text-heading">Texture Generation</span>
                           <button 
-                              onClick={() => updateSystemStatus('redisConnected', !systemStatus.redisConnected)}
-                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.redisConnected ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
+                              onClick={() => updateSystemStatus('redisConnected', !systemStatus.hunyuan3dReady)}
+                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.hunyuan3dReady ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
                           >
-                              <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.redisConnected ? 'translate-x-6' : 'translate-x-0'}`} />
+                              <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.hunyuan3dReady ? 'translate-x-6' : 'translate-x-0'}`} />
                           </button>
                       </div>
                       <p className="text-xs text-muted">
@@ -436,8 +505,8 @@ export default function App() {
                       </p>
                       <div className="flex items-center text-xs">
                         Status: 
-                        <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.redisConnected ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
-                           {systemStatus.redisConnected ? 'ONLINE' : 'DISCONNECTED'}
+                        <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.hunyuan3dReady ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
+                           {systemStatus.hasTexgen ? 'ENABLED' : 'DISABLED'}
                         </span>
                       </div>
                    </div>
@@ -445,12 +514,12 @@ export default function App() {
                    {/* MCP Toggle */}
                    <div className="toggle-card">
                       <div className="flex items-center justify-between">
-                          <span className="font-semibold text-heading">Unity MCP Server</span>
+                          <span className="font-semibold text-heading">Multi-View Mode</span>
                           <button 
-                              onClick={() => updateSystemStatus('unityMcpConnected', !systemStatus.unityMcpConnected)}
-                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.unityMcpConnected ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
+                              onClick={() => updateSystemStatus('unityMcpConnected', !systemStatus.hasMv)}
+                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.hasMv ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
                           >
-                              <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.unityMcpConnected ? 'translate-x-6' : 'translate-x-0'}`} />
+                              <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.hasMv ? 'translate-x-6' : 'translate-x-0'}`} />
                           </button>
                       </div>
                       <p className="text-xs text-muted">
@@ -458,8 +527,8 @@ export default function App() {
                       </p>
                       <div className="flex items-center text-xs">
                         Status: 
-                        <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.unityMcpConnected ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
-                           {systemStatus.unityMcpConnected ? 'LISTENING' : 'OFFLINE'}
+                        <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.hasMv ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
+                           {systemStatus.hasMv ? 'ENABLED' : 'DISABLED'}
                         </span>
                       </div>
                    </div>
@@ -467,6 +536,27 @@ export default function App() {
               </div>
 
             </div>
+          )}
+
+
+          {/* VIEW: IMAGE TO 3D */}
+          {activeView === 'image-to-3d' && (
+            <ImageTo3D onModelGenerated={handleModelGenerated} />
+          )}
+
+          {/* VIEW: TEXT TO 3D */}
+          {activeView === 'text-to-3d' && (
+            <TextTo3D onModelGenerated={handleModelGenerated} />
+          )}
+
+          {/* VIEW: MULTI-VIEW TO 3D */}
+          {activeView === 'multiview-to-3d' && (
+            <MultiViewTo3D onModelGenerated={handleModelGenerated} />
+          )}
+
+          {/* VIEW: MODEL GALLERY */}
+          {activeView === 'gallery' && (
+            <ModelGallery models={generatedModels} onRemove={handleModelRemove} />
           )}
 
         </main>

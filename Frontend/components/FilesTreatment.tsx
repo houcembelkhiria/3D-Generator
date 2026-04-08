@@ -56,7 +56,7 @@ export const FilesTreatment: React.FC<FilesTreatmentProps> = ({ onTextExtracted 
             )}
             <button
               onClick={() => setIsHistoryModalOpen(true)}
-              className="px-4 py-2 bg-[#7C3AED] hover:bg-[#6d28d9] text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              className="px-4 py-2 bg-[#FF8C66] hover:bg-[#ff7a4d] text-black rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>

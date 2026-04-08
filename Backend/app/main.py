@@ -1,85 +1,65 @@
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
 from app.api import routes
+from app.api import routes_3d
 from app.core.config import settings
 
-# Custom tags metadata for organized documentation
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load Hunyuan3D models at startup if available."""
+    logger.info("=== 3D Generator Backend starting ===")
+
+    try:
+        from app.core.hunyuan3d_config import Hunyuan3DSettings
+        from app.services.hunyuan3d_service import init_hunyuan3d
+
+        hy3d_settings = Hunyuan3DSettings()
+        logger.info("Device: %s", hy3d_settings.device)
+        logger.info("Model: %s / %s", hy3d_settings.model_path, hy3d_settings.subfolder)
+
+        Path(hy3d_settings.cache_path).mkdir(parents=True, exist_ok=True)
+        init_hunyuan3d(hy3d_settings)
+    except Exception as exc:
+        logger.warning(
+            "Hunyuan3D models could not be loaded: %s. "
+            "3D generation endpoints will return 503. "
+            "All other endpoints work normally.",
+            exc,
+        )
+
+    yield
+    logger.info("=== 3D Generator Backend shutting down ===")
+
+
 tags_metadata = [
-    {
-        "name": "System",
-        "description": "System health and status endpoints",
-    },
-    {
-        "name": "Document Processing",
-        "description": "Upload and process documents (PDF, Email) for 3D generation",
-    },
-    {
-        "name": "Task Management",
-        "description": "Monitor and manage asynchronous processing tasks",
-    },
-    {
-        "name": "3D Models",
-        "description": "Access and list generated 3D models",
-    },
-    {
-        "name": "PDF Tools",
-        "description": "PDF utility operations including text extraction",
-    },
+    {"name": "System", "description": "System health and status endpoints"},
+    {"name": "Document Processing", "description": "Upload and process documents (PDF, Email) for 3D generation"},
+    {"name": "Task Management", "description": "Monitor and manage asynchronous processing tasks"},
+    {"name": "3D Models", "description": "Access and list generated 3D models"},
+    {"name": "3D Generation", "description": "Generate 3D models from images, text, or multi-view inputs"},
+    {"name": "PDF Tools", "description": "PDF utility operations including text extraction"},
 ]
 
 app = FastAPI(
     title="3D Generator API",
-    description="""
-    # 3D Generator API
-    
-    A comprehensive API for generating 3D objects from documents using AI/ML processing.
-    
-    ## Features
-    
-    * **Document Upload**: Support for PDF and Email files
-    * **Async Processing**: Background task processing with Celery
-    * **3D Generation**: Convert documents to 3D models (GLB, OBJ, STL formats)
-    * **PDF Tools**: Extract text and process PDF documents
-    * **Real-time Monitoring**: Track task progress and status
-    
-    ## Architecture
-    
-    * **FastAPI**: High-performance async web framework
-    * **Celery**: Distributed task queue for background processing
-    * **Redis**: Message broker and result backend
-    * **Docker**: Containerized deployment
-    
-    ## Getting Started
-    
-    1. Upload a document using `POST /api/v1/upload`
-    2. Monitor processing status with `GET /api/v1/task/{task_id}`
-    3. Download generated 3D models from `GET /api/v1/models`
-    
-    ## Supported File Types
-    
-    * PDF documents (`application/pdf`)
-    * Email messages (`message/rfc822`)
-    
-    ## Rate Limits
-    
-    * Maximum file size: 50MB
-    * Concurrent processing: Configurable via Celery workers
-    """,
-    version="1.0.0",
+    description="Unified API for document processing and 3D model generation using Hunyuan3D.",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_tags=tags_metadata,
-    contact={
-        "name": "3D Generator Team",
-        "url": "https://github.com/your-org/3d-generator",
-    },
-    license_info={
-        "name": "MIT",
-        "url": "https://opensource.org/licenses/MIT",
-    },
+    lifespan=lifespan,
 )
 
-# Add CORS middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -88,25 +68,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API routes
+# Existing routes (document processing, upload, extract, etc.)
 app.include_router(routes.router, prefix="/api/v1")
 
-@app.get("/", tags=["System"], summary="Root endpoint", response_description="API welcome message")
-async def root():
-    """
-    Root endpoint that returns a welcome message.
-    
-    Use this to verify the API is running and accessible.
-    """
-    return {"message": "3D Generator API is running"}
+# 3D generation routes (image-to-3d, text-to-3d, multiview-to-3d)
+app.include_router(routes_3d.router)
 
-@app.get("/health", tags=["System"], summary="Health check", response_description="Service health status")
+
+
+
+@app.get("/", tags=["System"])
+async def root():
+    return {"message": "3D Generator API is running", "version": "2.0.0"}
+
+
+@app.get("/health", tags=["System"])
 async def health_check():
-    """
-    Health check endpoint for monitoring and load balancers.
-    
-    Returns the current health status of the API service.
-    
-    - **status**: Current health status (healthy/unhealthy)
-    """
-    return {"status": "healthy"}
+    try:
+        from app.services.hunyuan3d_service import _service
+        hy3d_ready = _service.is_ready if _service else False
+    except Exception:
+        hy3d_ready = False
+    return {"status": "healthy", "hunyuan3d_ready": hy3d_ready}
+
+
+# Serve generated 3D model files (MUST be after all route registrations)
+_outputs_dir = Path("generated/3d_outputs")
+_outputs_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/api/v1/outputs", StaticFiles(directory=str(_outputs_dir)), name="outputs")

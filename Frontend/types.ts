@@ -48,9 +48,28 @@ export interface ProcessLog {
 }
 
 export interface SystemStatus {
-  gpuVramUsage: number; // in GB
-  gpuTotalVram: number; // in GB
-  redisConnected: boolean;
-  unityMcpConnected: boolean;
-  activeWorkers: number;
+  device: string;
+  ramUsage: number;
+  ramTotal: number;
+  vramUsage: number;
+  vramTotal: number;
+  hunyuan3dReady: boolean;
+  hasTexgen: boolean;
+  hasT2i: boolean;
+  hasMv: boolean;
 }
+// ---- Hunyuan3D API Types ----
+
+export interface GeneratedModel {
+  id: string;
+  previewUrl: string;
+  downloadUrl: string;
+  format: string;
+  source: 'image-to-3d' | 'text-to-3d' | 'multiview-to-3d';
+  prompt?: string;
+  createdAt: string;
+  fromCache?: boolean;
+  attempt?: number;
+}
+
+export type AppView = 'agent' | 'files' | 'settings' | 'image-to-3d' | 'text-to-3d' | 'multiview-to-3d' | 'gallery';
