@@ -79,7 +79,7 @@ class Hunyuan3DService:
                 settings.mv_model_path,
                 subfolder=settings.mv_subfolder,
                 use_safetensors=True,
-                device=settings.device,
+                device="cpu",  # Start on CPU, move to GPU on demand
                 dtype=i23d_dtype,
             )
             if settings.enable_flashvdm:
@@ -116,11 +116,11 @@ class Hunyuan3DService:
                 t2i_dtype = self._dm.dtype
                 logger.info("Loading text-to-image pipeline...")
                 # Force CPU for t2i on MPS to avoid OOM (runs slower but reliably)
-                t2i_device = settings.device
+                t2i_device = "cpu"  # HunyuanDiT has MPS placeholder storage issues
                 self.t2i_pipeline = HunyuanDiTPipeline(
                     "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled",
                     device=t2i_device,
-                    dtype=self._dm.dtype,
+                    dtype=torch.float32,
                 )
             except Exception as exc:
                 logger.warning("Failed to load text-to-image pipeline: %s", exc)
@@ -202,6 +202,68 @@ class Hunyuan3DService:
         logger.info("Hunyuan3DService ready.")
 
 
+
+    def _ensure_mv_loaded(self):
+        """Lazy-load multi-view pipeline on first use."""
+        if self._mv_loaded or not self.settings.enable_mv:
+            return
+        logger.info("Lazy-loading multi-view pipeline...")
+        self.mv_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+            self.settings.mv_model_path,
+            subfolder=self.settings.mv_subfolder,
+            use_safetensors=True,
+            device="cpu",
+            dtype=self._dm.dtype,
+        )
+        if self.settings.enable_flashvdm:
+            mc_algo = self._dm.mc_algo
+            self.mv_pipeline.enable_flashvdm(mc_algo=mc_algo)
+        self._mv_loaded = True
+        logger.info("Multi-view pipeline ready")
+
+    def _ensure_texgen_loaded(self):
+        """Lazy-load texture pipeline on first use."""
+        if self._texgen_loaded or not self.settings.enable_tex:
+            return
+        try:
+            from hy3dgen.texgen import Hunyuan3DPaintPipeline
+            logger.info("Lazy-loading texture pipeline...")
+            self.texgen_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
+                self.settings.tex_model_path, device="cpu"
+            )
+            self.texgen_pipeline.models["multiview_model"].pipeline.vae.use_slicing = True
+            self._texgen_loaded = True
+            logger.info("Texture pipeline ready")
+        except Exception as exc:
+            logger.warning("Failed to load texture pipeline: %s", exc)
+
+    def _ensure_t2i_loaded(self):
+        """Lazy-load text-to-image pipeline on first use."""
+        if self._t2i_loaded or not self.settings.enable_t23d:
+            return
+        try:
+            from hy3dgen.text2image import HunyuanDiTPipeline
+            logger.info("Lazy-loading text-to-image pipeline...")
+            self.t2i_pipeline = HunyuanDiTPipeline(
+                "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled",
+                device="cpu",
+                dtype=torch.float32,
+            )
+            self._t2i_loaded = True
+            logger.info("Text-to-image pipeline ready")
+        except Exception as exc:
+            logger.warning("Failed to load text-to-image pipeline: %s", exc)
+
+    def _unload_pipeline(self, name: str):
+        """Unload a pipeline to free RAM."""
+        pipe = getattr(self, name, None)
+        if pipe is not None:
+            del pipe
+            setattr(self, name, None)
+            gc.collect()
+            empty_cache()
+            logger.info("Unloaded %s to free RAM", name)
+
     def _quantize_model(self, model, name: str, target_device=None):
         """Apply dynamic int8 quantization to Linear layers. Moves to CPU for quantization then back."""
         try:
@@ -253,15 +315,15 @@ class Hunyuan3DService:
 
     @property
     def has_texgen(self) -> bool:
-        return self.texgen_pipeline is not None
+        return self.settings.enable_tex
 
     @property
     def has_t2i(self) -> bool:
-        return self.t2i_pipeline is not None
+        return self.settings.enable_t23d
 
     @property
     def has_mv(self) -> bool:
-        return self.mv_pipeline is not None
+        return self.settings.enable_mv
 
     # --- Memory management (MPS) ---
     def _offload_to_cpu(self, *pipelines: str) -> None:
@@ -325,6 +387,33 @@ class Hunyuan3DService:
         result = Image.fromarray(blended.astype(np.uint8), "RGBA")
         logger.info("Blended input: %.0f%% new + %.0f%% previous (attempt #%d)", new_weight * 100, prev_weight * 100, attempt)
         return result
+
+    def _move_texgen_to_device(self):
+        """Move texture gen sub-models to GPU for inference."""
+        if self.texgen_pipeline is None or not self._dm.is_gpu:
+            return
+        dev = str(self._dm.device)
+        for name, model in self.texgen_pipeline.models.items():
+            if hasattr(model, 'pipeline'):
+                model.pipeline.to(dev)
+            elif hasattr(model, 'to'):
+                model.to(dev)
+        import gc; gc.collect()
+        empty_cache()
+        logger.info("Moved texgen to %s", dev)
+
+    def _offload_texgen_to_cpu(self):
+        """Move texture gen sub-models back to CPU."""
+        if self.texgen_pipeline is None or not self._dm.is_gpu:
+            return
+        for name, model in self.texgen_pipeline.models.items():
+            if hasattr(model, 'pipeline'):
+                model.pipeline.to('cpu')
+            elif hasattr(model, 'to'):
+                model.to('cpu')
+        import gc; gc.collect()
+        empty_cache()
+        logger.info("Moved texgen to CPU")
 
     # --- Helpers ---
     def _decode_b64_image(self, b64: str) -> Image.Image:
@@ -439,6 +528,7 @@ class Hunyuan3DService:
 
         include_normals = False
         if texture and self.has_texgen:
+            self._ensure_texgen_loaded()
             mesh = self.face_reducer(mesh, max_facenum=face_count)
             self._offload_to_cpu("i23d_pipeline")
             t0 = time.time()
@@ -474,7 +564,8 @@ class Hunyuan3DService:
         face_count: int = 20000,
         output_type: str = "glb",
     ) -> Dict:
-        if not self.has_t2i:
+        self._ensure_t2i_loaded()
+        if not self.has_t2i or self.t2i_pipeline is None:
             raise RuntimeError("Text-to-3D is disabled. Enable with HY3D_ENABLE_T23D=true.")
 
         # --- Incremental improvement for repeated prompts ---
@@ -610,7 +701,8 @@ class Hunyuan3DService:
         face_count: int = 20000,
         output_type: str = "glb",
     ) -> Dict:
-        if not self.has_mv:
+        self._ensure_mv_loaded()
+        if not self.has_mv or self.mv_pipeline is None:
             raise RuntimeError("Multi-view mode is disabled. Enable with HY3D_ENABLE_MV=true.")
 
         uid = uuid.uuid4()

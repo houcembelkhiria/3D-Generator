@@ -22,9 +22,8 @@ from diffusers import DDIMScheduler, StableDiffusionInstructPix2PixPipeline, Eul
 
 class Light_Shadow_Remover():
     def __init__(self, config):
-        dm = get_device_manager(config.device)
-        self.device = str(dm.device)
-        torch_dtype = dm.dtype
+        self.device = 'cpu'  # texgen models too large for MPS GPU
+        torch_dtype = torch.float32
         
         self.cfg_image = 1.5
         self.cfg_text = 1.0
@@ -99,11 +98,11 @@ class Light_Shadow_Remover():
 
         image = image.convert('RGB')
 
-        with get_device_manager(self.device).autocast():
+        with torch.amp.autocast('cpu', dtype=torch.bfloat16):
           image = self.pipeline(
             prompt="",
             image=image,
-            generator=get_device_manager(self.device).generator(42),
+            generator=torch.Generator(device='cpu').manual_seed(42),
             height=512,
             width=512,
             num_inference_steps=20,

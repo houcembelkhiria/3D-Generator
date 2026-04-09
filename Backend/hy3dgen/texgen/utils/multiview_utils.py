@@ -32,9 +32,8 @@ class Multiview_Diffusion_Net():
         current_file_path = os.path.abspath(__file__)
         custom_pipeline_path = os.path.join(os.path.dirname(current_file_path), '..', 'hunyuanpaint')
 
-        dm = get_device_manager(self.device)
-        self.device = str(dm.device)
-        self.dtype = dm.dtype
+        self.device = 'cpu'  # texgen models too large for MPS GPU
+        self.dtype = torch.float32
 
         pipeline = DiffusionPipeline.from_pretrained(
             multiview_ckpt_path,
@@ -98,6 +97,6 @@ class Multiview_Diffusion_Net():
         kwargs["normal_imgs"] = normal_image
         kwargs["position_imgs"] = position_image
 
-        with get_device_manager(str(self.pipeline.device)).autocast():
+        with torch.amp.autocast('cpu', dtype=torch.bfloat16):
           mvd_image = self.pipeline(input_image, num_inference_steps=15, **kwargs).images
         return mvd_image

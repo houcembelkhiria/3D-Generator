@@ -425,6 +425,8 @@ class Hunyuan3DDiTPipeline:
     def encode_cond(self, image, additional_cond_inputs, do_classifier_free_guidance, dual_guidance):
         # Cache conditioner output by image content hash
         import hashlib as _hl
+        if not hasattr(self, '_cond_cache'):
+            self._cond_cache = {}
         _cache_key = _hl.sha256(image.cpu().numpy().tobytes()[:4096]).hexdigest()[:12]
         _cache_key += f"_{do_classifier_free_guidance}_{dual_guidance}"
         if _cache_key in self._cond_cache:
