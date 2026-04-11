@@ -35,6 +35,8 @@ const MOCK_EXTRACTED_METADATA_VISUAL: AssetMetadata = {
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('agent');
   const [generatedModels, setGeneratedModels] = useState<GeneratedModel[]>([]);
+  // Keep generation views mounted once visited so in-progress jobs survive tab switches
+  const [mountedViews, setMountedViews] = useState<Set<AppView>>(() => new Set([activeView]));
   const [currentStep, setCurrentStep] = useState<PipelineStep>(PipelineStep.IDLE);
   const [logs, setLogs] = useState<ProcessLog[]>([]);
   const [metadata, setMetadata] = useState<AssetMetadata | null>(null);
@@ -103,6 +105,10 @@ export default function App() {
     const interval = setInterval(fetchStats, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setMountedViews(prev => { prev.add(activeView); return new Set(prev); });
+  }, [activeView]);
 
   // Fetch gallery from vector cache DB on mount
   useEffect(() => {
@@ -544,19 +550,25 @@ export default function App() {
           )}
 
 
-          {/* VIEW: IMAGE TO 3D */}
-          {activeView === 'image-to-3d' && (
-            <ImageTo3D onModelGenerated={handleModelGenerated} />
+          {/* VIEW: IMAGE TO 3D — kept mounted after first visit so jobs survive tab switches */}
+          {mountedViews.has('image-to-3d') && (
+            <div className={activeView === 'image-to-3d' ? '' : 'hidden'}>
+              <ImageTo3D onModelGenerated={handleModelGenerated} />
+            </div>
           )}
 
           {/* VIEW: TEXT TO 3D */}
-          {activeView === 'text-to-3d' && (
-            <TextTo3D onModelGenerated={handleModelGenerated} />
+          {mountedViews.has('text-to-3d') && (
+            <div className={activeView === 'text-to-3d' ? '' : 'hidden'}>
+              <TextTo3D onModelGenerated={handleModelGenerated} />
+            </div>
           )}
 
           {/* VIEW: MULTI-VIEW TO 3D */}
-          {activeView === 'multiview-to-3d' && (
-            <MultiViewTo3D onModelGenerated={handleModelGenerated} />
+          {mountedViews.has('multiview-to-3d') && (
+            <div className={activeView === 'multiview-to-3d' ? '' : 'hidden'}>
+              <MultiViewTo3D onModelGenerated={handleModelGenerated} />
+            </div>
           )}
 
           {/* VIEW: MODEL GALLERY */}
