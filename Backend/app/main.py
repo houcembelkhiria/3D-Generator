@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,19 +16,31 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load Hunyuan3D models at startup if available."""
+    """Load VectorStore first (lightweight), then Hunyuan3D models (heavy)."""
     logger.info("=== 3D Generator Backend starting ===")
 
+    from app.core.hunyuan3d_config import Hunyuan3DSettings
+    from app.services.vector_store import VectorStore
+
+    hy3d_settings = Hunyuan3DSettings()
+
+    # Step 1: VectorStore — lightweight, always available for gallery even if ML models fail
     try:
-        from app.core.hunyuan3d_config import Hunyuan3DSettings
+        vs_path = str(Path(hy3d_settings.cache_path).parent / "vector_store")
+        threshold = float(os.environ.get("HY3D_CACHE_THRESHOLD", "0.85"))
+        routes_3d._vector_store = VectorStore(persist_dir=vs_path, similarity_threshold=threshold)
+        logger.info("VectorStore ready at %s", vs_path)
+    except Exception as exc:
+        logger.warning("VectorStore init failed: %s", exc)
+
+    # Step 2: ML models — heavy, 3D generation endpoints return 503 if this fails
+    try:
         from app.services.hunyuan3d_service import init_hunyuan3d
 
-        hy3d_settings = Hunyuan3DSettings()
         logger.info("Device: %s", hy3d_settings.device)
         logger.info("Model: %s / %s", hy3d_settings.model_path, hy3d_settings.subfolder)
-
         Path(hy3d_settings.cache_path).mkdir(parents=True, exist_ok=True)
-        init_hunyuan3d(hy3d_settings)
+        init_hunyuan3d(hy3d_settings, vector_store=routes_3d._vector_store)
     except Exception as exc:
         logger.warning(
             "Hunyuan3D models could not be loaded: %s. "

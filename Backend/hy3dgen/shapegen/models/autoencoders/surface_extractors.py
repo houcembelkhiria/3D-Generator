@@ -66,10 +66,19 @@ class SurfaceExtractor:
 
 class MCSurfaceExtractor(SurfaceExtractor):
     def run(self, grid_logit, *, mc_level=-1/512, bounds=1.01, octree_resolution=256, **kwargs):
+        grid_np = grid_logit.cpu().numpy()
+        lo, hi = float(grid_np.min()), float(grid_np.max())
+        if hi > lo:
+            eps = 1e-4 * (hi - lo)
+            if not (lo + eps < mc_level < hi - eps):
+                import warnings
+                warnings.warn(
+                    f"mc_level={mc_level:.5f} outside grid range [{lo:.5f}, {hi:.5f}]; "
+                    f"clamping to midpoint", stacklevel=2
+                )
+                mc_level = float((lo + hi) / 2)
         vertices, faces, normals, _ = measure.marching_cubes(
-            grid_logit.cpu().numpy(),
-            mc_level,
-            method="lewiner"
+            grid_np, mc_level, method="lewiner"
         )
         grid_size, bbox_min, bbox_size = self._compute_box_stat(bounds, octree_resolution)
         vertices = vertices / grid_size * bbox_size + bbox_min

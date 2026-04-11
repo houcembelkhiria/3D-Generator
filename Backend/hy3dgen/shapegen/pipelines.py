@@ -33,6 +33,8 @@ from .utils import logger, synchronize_timer, smart_load_model
 from hy3dgen.device_utils import get_device_manager
 from hy3dgen.system_utils import get_device
 
+MAX_COND_CACHE = 5  # LRU cap for conditioner output cache (~100MB max)
+
 
 def retrieve_timesteps(
     scheduler,
@@ -460,6 +462,10 @@ class Hunyuan3DDiTPipeline:
                     return out
 
                 cond = cat_recursive(cond, un_cond)
+        # Store in cache with LRU eviction
+        self._cond_cache[_cache_key] = cond
+        while len(self._cond_cache) > MAX_COND_CACHE:
+            del self._cond_cache[next(iter(self._cond_cache))]
         return cond
 
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -613,6 +619,7 @@ class Hunyuan3DDiTPipeline:
             guidance_cond = self.get_guidance_scale_embedding(
                 guidance_scale_tensor, embedding_dim=self.model.guidance_cond_proj_dim
             ).to(device=device, dtype=latents.dtype)
+        _dm = get_device_manager()
         with synchronize_timer('Diffusion Sampling'):
             for i, t in enumerate(tqdm(timesteps, disable=not enable_pbar, desc="Diffusion Sampling:", leave=False)):
                 # expand the latents if we are doing classifier free guidance
@@ -625,20 +632,21 @@ class Hunyuan3DDiTPipeline:
                 # predict the noise residual
                 timestep_tensor = torch.tensor([t], dtype=t_dtype, device=device)
                 timestep_tensor = timestep_tensor.expand(latent_model_input.shape[0])
-                noise_pred = self.model(latent_model_input, timestep_tensor, cond, guidance_cond=guidance_cond)
+                with _dm.autocast():
+                    noise_pred = self.model(latent_model_input, timestep_tensor, cond, guidance_cond=guidance_cond)
 
-                # no drop, drop clip, all drop
-                if do_classifier_free_guidance:
-                    if dual_guidance:
-                        noise_pred_clip, noise_pred_dino, noise_pred_uncond = noise_pred.chunk(3)
-                        noise_pred = (
-                            noise_pred_uncond
-                            + guidance_scale * (noise_pred_clip - noise_pred_dino)
-                            + dual_guidance_scale * (noise_pred_dino - noise_pred_uncond)
-                        )
-                    else:
-                        noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
-                        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                    # no drop, drop clip, all drop — pure tensor arithmetic, safe in autocast dtype
+                    if do_classifier_free_guidance:
+                        if dual_guidance:
+                            noise_pred_clip, noise_pred_dino, noise_pred_uncond = noise_pred.chunk(3)
+                            noise_pred = (
+                                noise_pred_uncond
+                                + guidance_scale * (noise_pred_clip - noise_pred_dino)
+                                + dual_guidance_scale * (noise_pred_dino - noise_pred_uncond)
+                            )
+                        else:
+                            noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
+                            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 outputs = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs)
@@ -647,6 +655,7 @@ class Hunyuan3DDiTPipeline:
                 if callback is not None and i % callback_steps == 0:
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, outputs)
+                del latent_model_input, noise_pred, outputs
 
         return self._export(
             latents,
@@ -747,6 +756,7 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
             guidance = torch.tensor([guidance_scale] * batch_size, device=device, dtype=dtype)
             # logger.info(f'Using guidance embed with scale {guidance_scale}')
 
+        _dm = get_device_manager()
         with synchronize_timer('Diffusion Sampling'):
             for i, t in enumerate(tqdm(timesteps, disable=not enable_pbar, desc="Diffusion Sampling:")):
                 # expand the latents if we are doing classifier free guidance
@@ -758,11 +768,13 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
                 # NOTE: we assume model get timesteps ranged from 0 to 1
                 timestep = t.expand(latent_model_input.shape[0]).to(
                     latents.dtype) / self.scheduler.config.num_train_timesteps
-                noise_pred = self.model(latent_model_input, timestep, cond, guidance=guidance)
+                with _dm.autocast():
+                    noise_pred = self.model(latent_model_input, timestep, cond, guidance=guidance)
 
-                if do_classifier_free_guidance:
-                    noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+                    # CFG arithmetic — pure tensor math, safe in autocast dtype
+                    if do_classifier_free_guidance:
+                        noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
+                        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 outputs = self.scheduler.step(noise_pred, t, latents)
@@ -771,6 +783,7 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
                 if callback is not None and i % callback_steps == 0:
                     step_idx = i // getattr(self.scheduler, "order", 1)
                     callback(step_idx, t, outputs)
+                del latent_model_input, noise_pred, outputs
 
         return self._export(
             latents,

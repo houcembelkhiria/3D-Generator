@@ -18,9 +18,7 @@ import random
 import numpy as np
 import torch
 from hy3dgen.device_utils import get_device_manager
-from diffusers import DDIMScheduler, DiffusionPipeline
-from hy3dgen.device_utils import get_device_manager
-from diffusers import DDIMScheduler, EulerAncestralDiscreteScheduler
+from diffusers import DiffusionPipeline, EulerAncestralDiscreteScheduler
 
 
 class Multiview_Diffusion_Net():
@@ -32,8 +30,11 @@ class Multiview_Diffusion_Net():
         current_file_path = os.path.abspath(__file__)
         custom_pipeline_path = os.path.join(os.path.dirname(current_file_path), '..', 'hunyuanpaint')
 
-        self.device = 'cpu'  # texgen models too large for MPS GPU
-        self.dtype = torch.float32
+        _dm = get_device_manager()
+        # Texgen models too large for MPS VRAM — fall back to CPU on MPS
+        self.device = 'cpu' if _dm.device.type == 'mps' else str(_dm.device)
+        self.dtype = torch.float32 if self.device == 'cpu' else _dm.dtype
+        self._autocast_dtype = torch.bfloat16 if self.device == 'cpu' else _dm.autocast_dtype
 
         pipeline = DiffusionPipeline.from_pretrained(
             multiview_ckpt_path,
@@ -81,7 +82,7 @@ class Multiview_Diffusion_Net():
             if control_images[i].mode == 'L':
                 control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode='1')
 
-        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
+        kwargs = dict(generator=torch.Generator(device=self.device).manual_seed(0))
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]
@@ -97,6 +98,6 @@ class Multiview_Diffusion_Net():
         kwargs["normal_imgs"] = normal_image
         kwargs["position_imgs"] = position_image
 
-        with torch.amp.autocast('cpu', dtype=torch.bfloat16):
+        with torch.inference_mode(), torch.amp.autocast(self.device, dtype=self._autocast_dtype):
           mvd_image = self.pipeline(input_image, num_inference_steps=15, **kwargs).images
         return mvd_image

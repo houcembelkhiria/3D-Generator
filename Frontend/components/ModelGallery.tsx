@@ -85,6 +85,11 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove }) 
                         v{model.attempt}
                       </span>
                     )}
+                    {model.generationTime != null && (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-500/20 text-blue-400">
+                        {model.generationTime}s
+                      </span>
+                    )}
                   </div>
                   <span className="text-xs text-theme-muted uppercase">{model.format}</span>
                 </div>
@@ -96,6 +101,7 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove }) 
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-theme-muted">
                     {new Date(model.createdAt).toLocaleTimeString()}
+                    {model.generationTime != null && ` · ${model.generationTime}s`}
                   </span>
                   <div className="flex gap-1">
                     <a

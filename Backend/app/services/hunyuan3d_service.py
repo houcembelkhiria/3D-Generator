@@ -12,6 +12,7 @@ import gc
 import logging
 import time
 import uuid
+from collections import OrderedDict
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, Optional, Any
@@ -20,7 +21,12 @@ import hashlib
 import json as _json
 import torch
 import torch.quantization
+import numpy as np
 from PIL import Image
+
+# LRU cache limits — cap memory growth from generation history
+MAX_PROMPT_HISTORY = 20   # ~10MB (20 x ~500KB base64 PNG)
+MAX_INPUT_HISTORY = 10    # ~50MB (10 x ~5MB PIL Image)
 
 from app.services.vector_store import VectorStore
 
@@ -45,7 +51,7 @@ SUPPORTED_FORMATS = {"glb", "obj", "ply", "stl"}
 class Hunyuan3DService:
     """Manages all Hunyuan3D model pipelines and provides generation methods."""
 
-    def __init__(self, settings: Hunyuan3DSettings) -> None:
+    def __init__(self, settings: Hunyuan3DSettings, vector_store: Optional[VectorStore] = None) -> None:
         self.settings = settings
         self.device = settings.device
         self._dm = get_device_manager(settings.device)
@@ -71,23 +77,9 @@ class Hunyuan3DService:
             self.i23d_pipeline.vae.use_slicing = True
             logger.info("Enabled VAE slicing for shape-gen")
 
-        # --- Multi-view pipeline (optional) ---
+        # --- Multi-view pipeline (deferred — loaded on first use) ---
         self.mv_pipeline: Optional[Any] = None
-        if settings.enable_mv:
-            logger.info("Loading multi-view pipeline: %s / %s", settings.mv_model_path, settings.mv_subfolder)
-            self.mv_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-                settings.mv_model_path,
-                subfolder=settings.mv_subfolder,
-                use_safetensors=True,
-                device="cpu",  # Start on CPU, move to GPU on demand
-                dtype=i23d_dtype,
-            )
-            if settings.enable_flashvdm:
-                mc_algo = self._dm.mc_algo if settings.mc_algo == "mc" else settings.mc_algo
-                self.mv_pipeline.enable_flashvdm(mc_algo=mc_algo)
-            if hasattr(self.mv_pipeline, 'vae') and hasattr(self.mv_pipeline.vae, 'use_slicing'):
-                self.mv_pipeline.vae.use_slicing = True
-                logger.info("Enabled VAE slicing for multi-view")
+        self._mv_loaded = False
 
         # --- Post-processors ---
         self.floater_remover = FloaterRemover()
@@ -95,108 +87,62 @@ class Hunyuan3DService:
         self.face_reducer = FaceReducer()
         self.rembg = BackgroundRemover()
 
-        # --- Texture generation (optional) ---
+        # --- Texture generation (deferred — loaded on first use) ---
         self.texgen_pipeline: Optional[Any] = None
-        if settings.enable_tex:
-            try:
-                from hy3dgen.texgen import Hunyuan3DPaintPipeline
-                logger.info("Loading texture pipeline: %s", settings.tex_model_path)
-                self.texgen_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
-                    settings.tex_model_path, device=settings.device
-                )
-                self.texgen_pipeline.models["multiview_model"].pipeline.vae.use_slicing = True
-            except Exception as exc:
-                logger.warning("Failed to load texture pipeline: %s", exc)
+        self._texgen_loaded = False
 
-        # --- Text-to-image bridge (optional) ---
+        # --- Text-to-image bridge (deferred — loaded on first use) ---
         self.t2i_pipeline: Optional[Any] = None
-        if settings.enable_t23d:
-            try:
-                from hy3dgen.text2image import HunyuanDiTPipeline
-                t2i_dtype = self._dm.dtype
-                logger.info("Loading text-to-image pipeline...")
-                # Force CPU for t2i on MPS to avoid OOM (runs slower but reliably)
-                t2i_device = "cpu"  # HunyuanDiT has MPS placeholder storage issues
-                self.t2i_pipeline = HunyuanDiTPipeline(
-                    "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled",
-                    device=t2i_device,
-                    dtype=torch.float32,
-                )
-            except Exception as exc:
-                logger.warning("Failed to load text-to-image pipeline: %s", exc)
+        self._t2i_loaded = False
 
-        # --- Quantization (int8 for CPU-bound models only) ---
-        # Set quantization engine (required on macOS/ARM)
+        # --- Quantization engine (required on macOS/ARM) ---
         torch.backends.quantized.engine = self._dm.quantization_engine
-        # MPS doesn't support quantized ops, so only quantize models that run on CPU
-        if settings.enable_quantization:
-            logger.info("Applying int8 quantization to CPU-bound models...")
-            # Quantize texture gen UNet only if running on CPU (MPS doesn't support quantized ops)
-            if self.texgen_pipeline is not None and self.device == "cpu":
-                try:
-                    mv_model = self.texgen_pipeline.models.get("multiview_model")
-                    if mv_model and hasattr(mv_model, "pipeline"):
-                        pipe = mv_model.pipeline
-                        if hasattr(pipe, "unet"):
-                            pipe.unet = self._quantize_model(pipe.unet, "texgen UNet", target_device="cpu")
-                        elif hasattr(pipe, "transformer"):
-                            pipe.transformer = self._quantize_model(pipe.transformer, "texgen transformer", target_device="cpu")
-                except Exception as exc:
-                    logger.warning("Could not quantize texgen: %s", exc)
-            # Quantize text-to-image transformer (selective — skip incompatible pooler)
-            if self.t2i_pipeline is not None:
-                try:
-                    pipe = self.t2i_pipeline.pipe
-                    if hasattr(pipe, "transformer"):
-                        transformer = pipe.transformer
-                        # Save modules that break with quantization
-                        saved_modules = {}
-                        for name, mod in transformer.named_modules():
-                            if "pooler" in name or "AttentionPool" in type(mod).__name__:
-                                saved_modules[name] = mod
-                        # Quantize all Linear layers
-                        pipe.transformer = self._quantize_model(transformer, "t2i transformer", target_device="cpu")
-                        # Restore incompatible modules
-                        for name, mod in saved_modules.items():
-                            parts = name.split(".")
-                            parent = pipe.transformer
-                            for p in parts[:-1]:
-                                parent = getattr(parent, p)
-                            setattr(parent, parts[-1], mod)
-                        logger.info("Restored %d incompatible modules after quantization", len(saved_modules))
-                except Exception as exc:
-                    logger.warning("Could not quantize t2i: %s", exc)
 
-        # --- Memory optimization ---
+        # --- Memory optimization (CUDA only) ---
         try:
             from mmgp import offload as mmgp_offload
             if torch.cuda.is_available():
                 pipe_dict = mmgp_offload.extract_models("i23d", self.i23d_pipeline)
-                if self.mv_pipeline:
-                    pipe_dict.update(mmgp_offload.extract_models("mv", self.mv_pipeline))
-                if self.texgen_pipeline:
-                    pipe_dict.update(mmgp_offload.extract_models("texgen", self.texgen_pipeline))
-                if self.t2i_pipeline:
-                    pipe_dict.update(mmgp_offload.extract_models("t2i", self.t2i_pipeline))
                 mmgp_offload.profile(pipe_dict, profile_no=settings.profile, verboseLevel=settings.verbose)
         except ImportError:
             logger.info("mmgp not available — skipping GPU memory offloading.")
 
         empty_cache()
+
+        # torch.compile: CUDA and MPS (tracing overhead on first call, faster on subsequent)
+        if settings.device in ("cuda", "mps"):
+            try:
+                self.i23d_pipeline.model = torch.compile(self.i23d_pipeline.model, mode="reduce-overhead")
+                logger.info("Applied torch.compile to DiT model (%s)", settings.device)
+            except Exception as _exc:
+                logger.warning("torch.compile failed: %s", _exc)
+
+        # Quantize DiT to int8 on CPU — 2-3x speedup over float32 (quantized models must stay on CPU)
+        if settings.enable_quantization and settings.device == "cpu":
+            try:
+                self.i23d_pipeline.model = self._quantize_model(
+                    self.i23d_pipeline.model, "shape-gen DiT", target_device="cpu"
+                )
+            except Exception as exc:
+                logger.warning("Could not quantize shape-gen DiT: %s", exc)
+
         # --- Vector cache ---
-        try:
-            cache_threshold = float(os.environ.get("HY3D_CACHE_THRESHOLD", "0.85"))
-            self.vector_store = VectorStore(
-                persist_dir=str(Path(settings.cache_path).parent / "vector_store"),
-                similarity_threshold=cache_threshold,
-            )
-        except Exception as exc:
-            logger.warning("Vector cache unavailable: %s", exc)
-            self.vector_store = None
+        if vector_store is not None:
+            self.vector_store = vector_store
+        else:
+            try:
+                cache_threshold = float(os.environ.get("HY3D_CACHE_THRESHOLD", "0.85"))
+                self.vector_store = VectorStore(
+                    persist_dir=str(Path(settings.cache_path).parent / "vector_store"),
+                    similarity_threshold=cache_threshold,
+                )
+            except Exception as exc:
+                logger.warning("Vector cache unavailable: %s", exc)
+                self.vector_store = None
 
         # --- Generation history (stores previous inputs for blending) ---
-        self._prompt_history: dict = {}  # prompt_hash -> {count, best_image_b64, best_seed}
-        self._input_history: dict = {}  # embedding_hash -> PIL.Image (clean input from previous attempt)
+        self._prompt_history: OrderedDict = OrderedDict()  # prompt_hash -> {count, best_image_b64, best_seed}
+        self._input_history: OrderedDict = OrderedDict()  # embedding_hash -> PIL.Image (clean input from previous attempt)
 
         self._ready = True
         logger.info("Hunyuan3DService ready.")
@@ -232,6 +178,16 @@ class Hunyuan3DService:
                 self.settings.tex_model_path, device="cpu"
             )
             self.texgen_pipeline.models["multiview_model"].pipeline.vae.use_slicing = True
+            # Quantize if enabled and running on CPU
+            if self.settings.enable_quantization and self.device == "cpu":
+                try:
+                    mv_model = self.texgen_pipeline.models.get("multiview_model")
+                    if mv_model and hasattr(mv_model, "pipeline"):
+                        pipe = mv_model.pipeline
+                        if hasattr(pipe, "unet"):
+                            pipe.unet = self._quantize_model(pipe.unet, "texgen UNet", target_device="cpu")
+                except Exception as exc:
+                    logger.warning("Could not quantize texgen: %s", exc)
             self._texgen_loaded = True
             logger.info("Texture pipeline ready")
         except Exception as exc:
@@ -244,11 +200,33 @@ class Hunyuan3DService:
         try:
             from hy3dgen.text2image import HunyuanDiTPipeline
             logger.info("Lazy-loading text-to-image pipeline...")
+            # Use the GPU device when not quantizing (qint8 can only run on CPU)
+            t2i_device = "cpu" if self.settings.enable_quantization else self.device
+            t2i_dtype = torch.float32 if t2i_device == "cpu" else self._dm.dtype
             self.t2i_pipeline = HunyuanDiTPipeline(
                 "Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled",
-                device="cpu",
-                dtype=torch.float32,
+                device=t2i_device,
+                dtype=t2i_dtype,
             )
+            # Quantize transformer (selective — skip incompatible pooler)
+            if self.settings.enable_quantization:
+                try:
+                    pipe = self.t2i_pipeline.pipe
+                    if hasattr(pipe, "transformer"):
+                        transformer = pipe.transformer
+                        saved_modules = {}
+                        for name, mod in transformer.named_modules():
+                            if "pooler" in name or "AttentionPool" in type(mod).__name__:
+                                saved_modules[name] = mod
+                        pipe.transformer = self._quantize_model(transformer, "t2i transformer", target_device="cpu")
+                        for name, mod in saved_modules.items():
+                            parts = name.split(".")
+                            parent = pipe.transformer
+                            for p in parts[:-1]:
+                                parent = getattr(parent, p)
+                            setattr(parent, parts[-1], mod)
+                except Exception as exc:
+                    logger.warning("Could not quantize t2i: %s", exc)
             self._t2i_loaded = True
             logger.info("Text-to-image pipeline ready")
         except Exception as exc:
@@ -264,6 +242,26 @@ class Hunyuan3DService:
             empty_cache()
             logger.info("Unloaded %s to free RAM", name)
 
+    def _remove_background(self, image: Image.Image) -> Image.Image:
+        """Remove background only when needed — skip if image already has transparent pixels."""
+        if image.mode == "RGBA":
+            alpha = np.array(image.getchannel("A"))
+            if alpha.min() < 200:
+                logger.info("Skipping rembg — image already has transparent background")
+                return image
+        return self.rembg(image.convert("RGB"))
+
+
+    def _lru_put(self, cache: OrderedDict, key: str, value, max_size: int) -> None:
+        """Insert into an OrderedDict with LRU eviction."""
+        if key in cache:
+            cache.move_to_end(key)
+        cache[key] = value
+        while len(cache) > max_size:
+            _evicted_key, evicted_val = cache.popitem(last=False)
+            # Release PIL images explicitly
+            if hasattr(evicted_val, "close"):
+                evicted_val.close()
     def _quantize_model(self, model, name: str, target_device=None):
         """Apply dynamic int8 quantization to Linear layers. Moves to CPU for quantization then back."""
         try:
@@ -300,7 +298,9 @@ class Hunyuan3DService:
                 cond = self.i23d_pipeline.conditioner(image=image_tensor, **cond_inputs)
             emb = cond["main"].mean(dim=1).squeeze(0)
             emb = emb / emb.norm()
-            return emb.cpu().float().tolist()
+            result = emb.cpu().float().tolist()
+            del cond, image_tensor, emb
+            return result
         except Exception as exc:
             logger.warning("Embedding extraction failed: %s", exc)
             return None
@@ -385,6 +385,7 @@ class Hunyuan3DService:
             )
         # Keep alpha from new image
         result = Image.fromarray(blended.astype(np.uint8), "RGBA")
+        del new_arr, prev_arr, blended, new_mask, prev_mask, overlap
         logger.info("Blended input: %.0f%% new + %.0f%% previous (attempt #%d)", new_weight * 100, prev_weight * 100, attempt)
         return result
 
@@ -425,6 +426,11 @@ class Hunyuan3DService:
         return p
 
     def _export_mesh(self, mesh, uid: str, out_type: str, include_normals: bool = False) -> Dict:
+        if mesh is None:
+            raise ValueError(
+                "Shape generation produced no geometry (mesh is None). "
+                "The diffusion output may be degenerate — try a different seed or mc_level."
+            )
         save_dir = self._get_save_dir()
         preview_path = save_dir / f"{uid}.glb"
         
@@ -438,7 +444,7 @@ class Hunyuan3DService:
         
         t = threading.Thread(target=_do_export, daemon=True)
         t.start()
-        t.join(timeout=10)  # Wait max 10s, usually done in <2s
+        t.join(timeout=30)  # Wait max 10s, usually done in <2s
 
         return {
             "uid": str(uid),
@@ -464,7 +470,8 @@ class Hunyuan3DService:
         out_type = output_type if output_type in SUPPORTED_FORMATS else "glb"
 
         image = self._decode_b64_image(image_b64)
-        clean_image = self.rembg(image.convert("RGB"))
+        clean_image = self._remove_background(image)
+        _t_start = time.time()
 
         # --- Incremental cache: track attempts per image ---
         _embedding = None
@@ -510,20 +517,23 @@ class Hunyuan3DService:
         # Store current clean input for next attempt's blending
         if _embedding is not None:
             emb_key = hashlib.sha256(str(_embedding[:8]).encode()).hexdigest()[:12]
-            self._input_history[emb_key] = clean_image.copy()
+            self._lru_put(self._input_history, emb_key, clean_image.copy(), MAX_INPUT_HISTORY)
 
         generator = torch.Generator(self.device).manual_seed(seed)
         t0 = time.time()
-        outputs = self.i23d_pipeline(
-            image=clean_image,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-            octree_resolution=octree_resolution,
-            num_chunks=num_chunks,
-            output_type="mesh",
-        )
+        with torch.inference_mode():
+            outputs = self.i23d_pipeline(
+                image=clean_image,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                generator=generator,
+                octree_resolution=octree_resolution,
+                num_chunks=num_chunks,
+                output_type="mesh",
+                enable_pbar=False,
+            )
         mesh = export_to_trimesh(outputs)[0]
+        del outputs
         logger.info("Shape gen took %.1f s", time.time() - t0)
 
         include_normals = False
@@ -532,15 +542,18 @@ class Hunyuan3DService:
             mesh = self.face_reducer(mesh, max_facenum=face_count)
             self._offload_to_cpu("i23d_pipeline")
             t0 = time.time()
-            mesh = self.texgen_pipeline(mesh, clean_image)
+            with torch.inference_mode():
+                mesh = self.texgen_pipeline(mesh, clean_image)
             logger.info("Texture gen took %.1f s", time.time() - t0)
             self._move_to_device("i23d_pipeline")
             include_normals = True
+        del clean_image, image
 
         result = self._export_mesh(mesh, uid, out_type, include_normals)
 
         # --- Vector cache store (with attempt tracking) ---
         result["attempt"] = _attempt
+        result["generation_time"] = round(time.time() - _t_start, 1)
         if self.vector_store is not None and _embedding is not None and _params_hash is not None:
             # Delete previous entry for same params so only latest attempt is cached
             if _attempt > 1:
@@ -574,6 +587,7 @@ class Hunyuan3DService:
         attempt = (history["count"] + 1) if history else 1
         
         if history and attempt > 1:
+            _t_start = time.time()
             # REUSE previous image — skip the expensive t2i step entirely
             # Generate a NEW image too with more steps, pick the better one
             prev_image_b64 = history["best_image_b64"]
@@ -624,18 +638,22 @@ class Hunyuan3DService:
                 buf = BytesIO()
                 new_image.save(buf, format="PNG")
                 new_b64 = base64.b64encode(buf.getvalue()).decode()
+                buf.close()
+                # Free t2i memory after improvement generation
+                self._offload_to_cpu("t2i_pipeline")
                 # Store improved image for next attempt
-                self._prompt_history[prompt_hash] = {
+                self._lru_put(self._prompt_history, prompt_hash, {
                     "count": attempt,
                     "best_image_b64": new_b64,
                     "best_seed": seed_actual,
-                }
+                }, MAX_PROMPT_HISTORY)
                 logger.info("Improved t2i image generated in %.1f s (stored for attempt #%d)", time.time() - t0, attempt + 1)
             except Exception as exc:
                 logger.warning("Background t2i improvement failed: %s", exc)
-                self._prompt_history[prompt_hash] = {**history, "count": attempt}
+                self._lru_put(self._prompt_history, prompt_hash, {**history, "count": attempt}, MAX_PROMPT_HISTORY)
             
             result["attempt"] = attempt
+            result["generation_time"] = round(time.time() - _t_start, 1)
             result["prompt"] = text
             # Update cache entry with prompt and attempt
             if self.vector_store is not None:
@@ -650,20 +668,24 @@ class Hunyuan3DService:
         
         else:
             # FIRST ATTEMPT — full t2i + shape gen
+            _t_start = time.time()
             t0 = time.time()
             image = self.t2i_pipeline(text, seed=seed)
             logger.info("Text-to-image took %.1f s (attempt #1)", time.time() - t0)
+            # Free t2i memory before shape gen
+            self._offload_to_cpu("t2i_pipeline")
             
             buf = BytesIO()
             image.save(buf, format="PNG")
             image_b64 = base64.b64encode(buf.getvalue()).decode()
+            buf.close()
             
             # Store for future attempts
-            self._prompt_history[prompt_hash] = {
+            self._lru_put(self._prompt_history, prompt_hash, {
                 "count": 1,
                 "best_image_b64": image_b64,
                 "best_seed": seed,
-            }
+            }, MAX_PROMPT_HISTORY)
             
             result = self.image_to_3d(
                 image_b64=image_b64,
@@ -677,6 +699,7 @@ class Hunyuan3DService:
                 output_type=output_type,
             )
             result["attempt"] = 1
+            result["generation_time"] = round(time.time() - _t_start, 1)
             result["prompt"] = text
             # Update cache entry with prompt
             if self.vector_store is not None:
@@ -708,12 +731,12 @@ class Hunyuan3DService:
         uid = uuid.uuid4()
         out_type = output_type if output_type in SUPPORTED_FORMATS else "glb"
 
+        _t_start = time.time()
         image_dict: Dict[str, Image.Image] = {}
         for view_name, b64 in views.items():
             if b64:
                 pil = self._decode_b64_image(b64)
-                if pil.mode == "RGB":
-                    pil = self.rembg(pil)
+                pil = self._remove_background(pil)
                 image_dict[view_name] = pil
 
         # --- Incremental cache for multiview (using front view) ---
@@ -752,7 +775,7 @@ class Hunyuan3DService:
                 image_dict["front"] = self._blend_with_previous(image_dict["front"], prev_front, _attempt)
         if _embedding is not None and "front" in image_dict:
             emb_key = hashlib.sha256(str(_embedding[:8]).encode()).hexdigest()[:12]
-            self._input_history[emb_key] = image_dict["front"].copy()
+            self._lru_put(self._input_history, emb_key, image_dict["front"].copy(), MAX_INPUT_HISTORY)
 
         # Offload other pipelines for MV
         self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")
@@ -760,15 +783,17 @@ class Hunyuan3DService:
 
         generator = torch.Generator(self.device).manual_seed(seed)
         t0 = time.time()
-        outputs = self.mv_pipeline(
-            image=image_dict,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-            octree_resolution=octree_resolution,
-            num_chunks=num_chunks,
-            output_type="mesh",
-        )
+        with torch.inference_mode():
+            outputs = self.mv_pipeline(
+                image=image_dict,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                generator=generator,
+                octree_resolution=octree_resolution,
+                num_chunks=num_chunks,
+                output_type="mesh",
+                enable_pbar=False,
+            )
         mesh = export_to_trimesh(outputs)[0]
         logger.info("MV shape gen took %.1f s", time.time() - t0)
 
@@ -790,6 +815,7 @@ class Hunyuan3DService:
 
         # --- Vector cache store (with attempt tracking) ---
         result["attempt"] = _attempt
+        result["generation_time"] = round(time.time() - _t_start, 1)
         if self.vector_store is not None and _embedding is not None and _params_hash is not None:
             if _attempt > 1:
                 prev = self.vector_store.search(_embedding, _params_hash)
@@ -805,11 +831,11 @@ class Hunyuan3DService:
 _service: Optional[Hunyuan3DService] = None
 
 
-def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None) -> Hunyuan3DService:
+def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None, vector_store: Optional[VectorStore] = None) -> Hunyuan3DService:
     global _service
     if settings is None:
         settings = Hunyuan3DSettings()
-    _service = Hunyuan3DService(settings)
+    _service = Hunyuan3DService(settings, vector_store=vector_store)
     return _service
 
 

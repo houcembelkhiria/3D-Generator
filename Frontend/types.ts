@@ -70,6 +70,7 @@ export interface GeneratedModel {
   createdAt: string;
   fromCache?: boolean;
   attempt?: number;
+  generationTime?: number;
 }
 
 export type AppView = 'agent' | 'files' | 'settings' | 'image-to-3d' | 'text-to-3d' | 'multiview-to-3d' | 'gallery';

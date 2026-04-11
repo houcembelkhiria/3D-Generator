@@ -17,13 +17,16 @@ import numpy as np
 import torch
 from PIL import Image
 from hy3dgen.device_utils import get_device_manager
-from diffusers import DDIMScheduler, StableDiffusionInstructPix2PixPipeline, EulerAncestralDiscreteScheduler
+from diffusers import StableDiffusionInstructPix2PixPipeline, EulerAncestralDiscreteScheduler
 
 
 class Light_Shadow_Remover():
     def __init__(self, config):
-        self.device = 'cpu'  # texgen models too large for MPS GPU
-        torch_dtype = torch.float32
+        _dm = get_device_manager()
+        # Texgen models too large for MPS VRAM — fall back to CPU on MPS
+        self.device = 'cpu' if _dm.device.type == 'mps' else str(_dm.device)
+        torch_dtype = torch.float32 if self.device == 'cpu' else _dm.dtype
+        self._autocast_dtype = torch.bfloat16 if self.device == 'cpu' else _dm.autocast_dtype
         
         self.cfg_image = 1.5
         self.cfg_text = 1.0
@@ -98,11 +101,11 @@ class Light_Shadow_Remover():
 
         image = image.convert('RGB')
 
-        with torch.amp.autocast('cpu', dtype=torch.bfloat16):
+        with torch.amp.autocast(self.device, dtype=self._autocast_dtype):
           image = self.pipeline(
             prompt="",
             image=image,
-            generator=torch.Generator(device='cpu').manual_seed(42),
+            generator=torch.Generator(device=self.device).manual_seed(42),
             height=512,
             width=512,
             num_inference_steps=20,

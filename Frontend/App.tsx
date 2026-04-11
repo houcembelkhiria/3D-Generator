@@ -61,7 +61,11 @@ export default function App() {
       message,
       type
     };
-    setLogs(prev => [...prev, newLog]);
+    const MAX_LOGS = 500;
+    setLogs(prev => {
+      const updated = [...prev, newLog];
+      return updated.length > MAX_LOGS ? updated.slice(-MAX_LOGS) : updated;
+    });
   }, [currentStep]);
 
   const handleTextExtracted = useCallback((text: string) => {
@@ -118,6 +122,7 @@ export default function App() {
               createdAt: m.createdAt,
               fromCache: true,
               attempt: m.attempt,
+              generationTime: m.generationTime,
             }));
             setGeneratedModels(cached);
           }

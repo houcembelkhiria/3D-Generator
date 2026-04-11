@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GeneratedModel } from '../types';
 import { ModelViewer3D } from './ModelViewer3D';
 import { IconUpload, IconLoader, IconBox } from './Icons';
@@ -18,62 +18,84 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ previewUrl: string; downloadUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Basic params
   const [texture, setTexture] = useState(false);
   const [steps, setSteps] = useState(5);
   const [outputType, setOutputType] = useState('glb');
+  // Advanced params
+  const [seed, setSeed] = useState(1234);
+  const [guidanceScale, setGuidanceScale] = useState(5.0);
+  const [octreeResolution, setOctreeResolution] = useState(128);
+  const [numChunks, setNumChunks] = useState(50000);
+  const [faceCount, setFaceCount] = useState(20000);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  // UI
+  const [elapsed, setElapsed] = useState(0);
+  const [generationTime, setGenerationTime] = useState<number | null>(null);
   const fileRefs = useRef<Record<ViewName, HTMLInputElement | null>>({ front: null, back: null, left: null, right: null });
 
   const handleFile = useCallback((view: ViewName, file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      setImages(prev => ({
-        ...prev,
-        [view]: { preview: dataUrl, b64: dataUrl.split(',')[1] },
-      }));
+      setImages(prev => ({ ...prev, [view]: { preview: dataUrl, b64: dataUrl.split(',')[1] } }));
       setResult(null);
       setError(null);
     };
     reader.readAsDataURL(file);
   }, []);
 
+  useEffect(() => {
+    if (!loading) return;
+    setElapsed(0);
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [loading]);
+
   const generate = async () => {
     if (!images.front) return;
     setLoading(true);
     setError(null);
     setResult(null);
-
+    setGenerationTime(null);
     try {
       const payload: Record<string, any> = {
         front: images.front.b64,
+        seed,
         num_inference_steps: steps,
-        guidance_scale: 5.0,
-        octree_resolution: 128,
-        num_chunks: 8000,
+        guidance_scale: guidanceScale,
+        octree_resolution: octreeResolution,
+        num_chunks: numChunks,
         texture,
+        face_count: faceCount,
         type: outputType,
       };
       if (images.back) payload.back = images.back.b64;
       if (images.left) payload.left = images.left.b64;
       if (images.right) payload.right = images.right.b64;
 
-      const res = await fetch(`${API_BASE}/api/v1/multiview-to-3d`, {
+      const submitRes = await fetch(`${API_BASE}/api/v1/multiview-to-3d/async`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `HTTP ${res.status}`);
+      if (!submitRes.ok) {
+        const err = await submitRes.json();
+        throw new Error(err.detail || `HTTP ${submitRes.status}`);
       }
-
-      const data = await res.json();
-      setResult({
-        previewUrl: `${API_BASE}${data.preview_url}`,
-        downloadUrl: `${API_BASE}${data.download_url}`,
-      });
-
+      const { uid } = await submitRes.json();
+      let data: any = null;
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        const pollRes = await fetch(`${API_BASE}/api/v1/generation-status/${uid}`);
+        if (!pollRes.ok) throw new Error(`Poll failed: HTTP ${pollRes.status}`);
+        const poll = await pollRes.json();
+        if (poll.status === 'completed') { data = poll; break; }
+        if (poll.status === 'failed') throw new Error(poll.error || 'Generation failed');
+      }
+      setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
+      setGenerationTime(data.generation_time ?? null);
       onModelGenerated?.({
         id: crypto.randomUUID(),
         previewUrl: `${API_BASE}${data.preview_url}`,
@@ -82,6 +104,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
         source: 'multiview-to-3d',
         createdAt: new Date().toISOString(),
         fromCache: data.from_cache ?? false,
+        generationTime: data.generation_time,
       });
     } catch (e: any) {
       setError(e.message);
@@ -98,10 +121,10 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
         <h2 className="text-xl font-bold text-heading mb-2 flex items-center">
           <IconBox className="mr-3 text-[#FF8C66]" /> Multi-View to 3D
         </h2>
-        <p className="text-body text-sm mb-6">Upload 1-4 views of an object (front required) for higher-quality 3D reconstruction.</p>
+        <p className="text-body text-sm mb-6">Upload 1–4 views of an object (front required) for higher-quality 3D reconstruction.</p>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: Upload views */}
+          {/* Left */}
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               {VIEWS.map(view => (
@@ -123,47 +146,102 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
                   </div>
                   <input
                     ref={el => { fileRefs.current[view] = el; }}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
+                    type="file" accept="image/*" className="hidden"
                     onChange={(e) => e.target.files?.[0] && handleFile(view, e.target.files[0])}
                   />
                 </div>
               ))}
             </div>
 
-            {/* Options */}
-            <div className="flex items-center gap-4">
+            {/* Basic options */}
+            <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-sm text-theme-secondary">
                 <input type="checkbox" checked={texture} onChange={(e) => setTexture(e.target.checked)} className="accent-[#7C3AED]" />
-                Generate texture
+                Texture
               </label>
-
               <label className="flex items-center gap-2 text-sm text-theme-secondary">
                 Format:
                 <select value={outputType} onChange={(e) => setOutputType(e.target.value)} className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
-                  <option value="glb">GLB</option>
-                  <option value="obj">OBJ</option>
-                  <option value="ply">PLY</option>
-                  <option value="stl">STL</option>
+                  <option value="glb">GLB</option><option value="obj">OBJ</option>
+                  <option value="ply">PLY</option><option value="stl">STL</option>
                 </select>
               </label>
               <label className="flex items-center gap-2 text-sm text-theme-secondary">
                 Steps:
-                <input type="number" value={steps} onChange={(e) => setSteps(Number(e.target.value))} min={1} max={100} className="w-16 bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary" />
+                <input type="number" value={steps} onChange={(e) => setSteps(Number(e.target.value))} min={1} max={100}
+                  className="w-16 bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary" />
               </label>
             </div>
 
+            {/* Advanced toggle */}
+            <button type="button" onClick={() => setShowAdvanced(v => !v)}
+              className="text-xs text-theme-muted hover:text-theme-secondary flex items-center gap-1 transition-colors">
+              ⚙ Advanced {showAdvanced ? '▲' : '▼'}
+            </button>
+
+            {showAdvanced && (
+              <div className="grid grid-cols-2 gap-3 p-3 bg-[var(--bg-tertiary)] rounded-xl border border-theme">
+                <label className="flex flex-col gap-1 text-xs text-theme-secondary">
+                  Seed
+                  <div className="flex gap-1">
+                    <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))}
+                      className="flex-1 min-w-0 bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary" />
+                    <button type="button" onClick={() => setSeed(Math.floor(Math.random() * 99999))} title="Random seed"
+                      className="px-2 py-1 bg-[var(--bg-input)] border border-theme rounded hover:bg-[var(--bg-card)] transition-colors text-sm">⟳</button>
+                  </div>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-theme-secondary">
+                  <span>Guidance Scale <span className="font-mono text-theme-primary">{guidanceScale.toFixed(1)}</span></span>
+                  <input type="range" value={guidanceScale} onChange={(e) => setGuidanceScale(Number(e.target.value))}
+                    min={0} max={20} step={0.5} className="accent-[#FF8C66] mt-2" />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-theme-secondary">
+                  Mesh Resolution
+                  <select value={octreeResolution} onChange={(e) => setOctreeResolution(Number(e.target.value))}
+                    className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
+                    <option value={64}>64 — fastest</option>
+                    <option value={128}>128 — default</option>
+                    <option value={256}>256 — detailed</option>
+                    <option value={384}>384 — high quality</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-theme-secondary">
+                  Mesh Chunks
+                  <select value={numChunks} onChange={(e) => setNumChunks(Number(e.target.value))}
+                    className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
+                    <option value={2000}>2 000 — low RAM</option>
+                    <option value={8000}>8 000</option>
+                    <option value={32000}>32 000</option>
+                    <option value={50000}>50 000 — default</option>
+                    <option value={100000}>100 000 — fast</option>
+                    <option value={200000}>200 000 — fastest</option>
+                  </select>
+                </label>
+                {texture && (
+                  <label className="flex flex-col gap-1 text-xs text-theme-secondary col-span-2">
+                    Max Face Count
+                    <input type="number" value={faceCount} onChange={(e) => setFaceCount(Number(e.target.value))}
+                      min={1000} step={1000}
+                      className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary" />
+                  </label>
+                )}
+              </div>
+            )}
+
             <button
-              onClick={generate}
-              disabled={!images.front || loading}
-              className="w-full px-4 py-3 bg-[#FF8C66] hover:bg-[#ff7a4d] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded-xl font-bold transition-all flex items-center justify-center gap-2"
+              type="button"
+              onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setShowAdvanced(true); }}
+              className="w-full px-3 py-1.5 border border-[#FF8C66]/50 hover:border-[#FF8C66] text-[#FF8C66] text-xs font-bold rounded-xl transition-all"
+              disabled={loading}
             >
-              {loading ? (
-                <><IconLoader className="w-5 h-5 animate-spin" /> Generating from {viewCount} view{viewCount > 1 ? 's' : ''}...</>
-              ) : (
-                `Generate from ${viewCount} view${viewCount > 1 ? 's' : ''}`
-              )}
+              ⚡ Draft Mode — fastest (steps=1, res=64, chunks=200k)
+            </button>
+
+            <button onClick={generate} disabled={!images.front || loading}
+              className="w-full px-4 py-3 bg-[#FF8C66] hover:bg-[#ff7a4d] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded-xl font-bold transition-all flex items-center justify-center gap-2">
+              {loading
+                ? <><IconLoader className="w-5 h-5 animate-spin" /> Generating... {elapsed}s</>
+                : `Generate from ${viewCount} view${viewCount !== 1 ? 's' : ''}`}
             </button>
 
             {error && <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 p-3 rounded-lg">{error}</p>}
@@ -174,11 +252,11 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
             {result ? (
               <>
                 <ModelViewer3D src={result.previewUrl} />
-                <a
-                  href={result.downloadUrl}
-                  download
-                  className="block w-full text-center px-4 py-3 bg-[#7C3AED] hover:bg-[#6d28d9] text-white rounded-xl font-bold transition-all"
-                >
+                {generationTime != null && (
+                  <div className="text-center text-sm text-theme-muted font-mono">Generated in {generationTime}s</div>
+                )}
+                <a href={result.downloadUrl} download
+                  className="block w-full text-center px-4 py-3 bg-[#7C3AED] hover:bg-[#6d28d9] text-white rounded-xl font-bold transition-all">
                   {`Download ${outputType.toUpperCase()}`}
                 </a>
               </>

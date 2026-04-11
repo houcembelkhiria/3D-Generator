@@ -11,12 +11,17 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.services.hunyuan3d_service import get_hunyuan3d as _get_hunyuan3d
+from app.services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
+
+# Initialized by app lifespan before ML models — gallery loads even during model startup
+_vector_store: Optional[VectorStore] = None
 
 router = APIRouter(prefix="/api/v1", tags=["3D Generation"])
 
@@ -78,7 +83,8 @@ class MultiViewTo3DRequest(BaseModel):
 async def image_to_3d(body: ImageTo3DRequest):
     svc = get_hunyuan3d()
     try:
-        result = svc.image_to_3d(
+        result = await run_in_threadpool(
+            svc.image_to_3d,
             image_b64=body.image,
             seed=body.seed,
             steps=body.num_inference_steps,
@@ -101,7 +107,8 @@ async def text_to_3d(body: TextTo3DRequest):
     if not svc.has_t2i:
         raise HTTPException(status_code=503, detail="Text-to-3D is disabled. Set HY3D_ENABLE_T23D=true.")
     try:
-        result = svc.text_to_3d(
+        result = await run_in_threadpool(
+            svc.text_to_3d,
             text=body.text,
             seed=body.seed,
             steps=body.num_inference_steps,
@@ -134,7 +141,8 @@ async def multiview_to_3d(body: MultiViewTo3DRequest):
         if body.right:
             views["right"] = body.right
 
-        result = svc.multiview_to_3d(
+        result = await run_in_threadpool(
+            svc.multiview_to_3d,
             views=views,
             seed=body.seed,
             steps=body.num_inference_steps,
@@ -155,17 +163,17 @@ async def multiview_to_3d(body: MultiViewTo3DRequest):
 
 @router.get("/generation-status/{uid}", summary="Check async generation status")
 async def generation_status(uid: str):
-    svc = get_hunyuan3d()
-    output_path = Path(svc.settings.cache_path) / f"{uid}.glb"
-    if output_path.exists():
-        return {"status": "completed", "preview_url": f"/api/v1/outputs/{uid}.glb", "download_url": f"/api/v1/outputs/{uid}.glb"}
-    return {"status": "processing"}
+    if uid not in _pending_results:
+        raise HTTPException(status_code=404, detail="Job not found")
+    result = _pending_results[uid]
+    if result is None:
+        return {"status": "processing"}
+    return result
 
 
 @router.get("/generated-models", summary="List all generated 3D models")
 async def list_generated_models():
-    svc = get_hunyuan3d()
-    output_dir = Path(svc.settings.cache_path)
+    output_dir = Path("generated/3d_outputs")
     if not output_dir.exists():
         return {"models": []}
 
@@ -239,10 +247,9 @@ async def system_stats():
 
 @router.get("/cache-stats", summary="Get vector cache statistics and gallery models")
 async def cache_stats():
-    svc = get_hunyuan3d()
-    if svc.vector_store is None:
+    if _vector_store is None:
         return {"total_entries": 0, "models": [], "available": False}
-    entries = svc.vector_store.list_all()
+    entries = _vector_store.list_all()
     models = []
     for entry in entries:
         try:
@@ -257,6 +264,7 @@ async def cache_stats():
                 "createdAt": entry.get("created_at", ""),
                 "fromCache": True,
                 "attempt": result.get("attempt"),
+                "generationTime": result.get("generation_time"),
             })
         except Exception:
             continue
@@ -267,10 +275,9 @@ async def cache_stats():
 
 @router.delete("/cache/{entry_id}", summary="Delete a cache entry")
 async def delete_cache_entry(entry_id: str):
-    svc = get_hunyuan3d()
-    if svc.vector_store is None:
+    if _vector_store is None:
         raise HTTPException(status_code=503, detail="Vector cache not available")
-    success = svc.vector_store.delete(entry_id)
+    success = _vector_store.delete(entry_id)
     if not success:
         raise HTTPException(status_code=404, detail="Cache entry not found")
     return {"deleted": True}
@@ -306,11 +313,18 @@ async def find_similar_models(body: ImageTo3DRequest):
 
 # --- Async submission endpoints ---
 
+# Stores results from background generation jobs: uid -> result dict | None (still running)
+_pending_results: dict = {}
+
+
 def _run_in_background(fn, uid, **kwargs):
+    _pending_results[uid] = None  # marks job as in-progress
     try:
-        fn(**kwargs)
-    except Exception:
+        result = fn(**kwargs)
+        _pending_results[uid] = {"status": "completed", **result}
+    except Exception as exc:
         logger.exception("Background generation %s failed", uid)
+        _pending_results[uid] = {"status": "failed", "error": str(exc)}
 
 
 @router.post("/image-to-3d/async", summary="Submit async image-to-3d job")
@@ -319,7 +333,7 @@ async def image_to_3d_async(body: ImageTo3DRequest):
     uid = str(uuid.uuid4())
 
     def run():
-        svc.image_to_3d(image_b64=body.image, seed=body.seed, steps=body.num_inference_steps,
+        return svc.image_to_3d(image_b64=body.image, seed=body.seed, steps=body.num_inference_steps,
                         guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
                         num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
                         output_type=body.type)
@@ -336,10 +350,31 @@ async def text_to_3d_async(body: TextTo3DRequest):
     uid = str(uuid.uuid4())
 
     def run():
-        svc.text_to_3d(text=body.text, seed=body.seed, steps=body.num_inference_steps,
+        return svc.text_to_3d(text=body.text, seed=body.seed, steps=body.num_inference_steps,
                        guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
                        num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
                        output_type=body.type)
+
+    threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
+    return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
+
+
+@router.post("/multiview-to-3d/async", summary="Submit async multiview-to-3d job")
+async def multiview_to_3d_async(body: MultiViewTo3DRequest):
+    svc = get_hunyuan3d()
+    if not svc.has_mv:
+        raise HTTPException(status_code=503, detail="Multi-view mode is disabled.")
+    uid = str(uuid.uuid4())
+    views = {"front": body.front}
+    if body.back: views["back"] = body.back
+    if body.left: views["left"] = body.left
+    if body.right: views["right"] = body.right
+
+    def run():
+        return svc.multiview_to_3d(views=views, seed=body.seed, steps=body.num_inference_steps,
+                            guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
+                            num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
+                            output_type=body.type)
 
     threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)

@@ -167,16 +167,15 @@ class VanillaVolumeDecoder:
         )
         xyz_samples = torch.from_numpy(xyz_samples).to(device, dtype=dtype).contiguous().reshape(-1, 3)
 
-        # 2. latents to 3d volume
-        batch_logits = []
-        for start in tqdm(range(0, xyz_samples.shape[0], num_chunks), desc=f"Volume Decoding",
+        # 2. latents to 3d volume — preallocate output to avoid list accumulation
+        total_points = xyz_samples.shape[0]
+        grid_logits = torch.zeros((batch_size, total_points, 1), device=device, dtype=dtype)
+        for start in tqdm(range(0, total_points, num_chunks), desc=f"Volume Decoding",
                           disable=not enable_pbar):
-            chunk_queries = xyz_samples[start: start + num_chunks, :]
+            end = min(start + num_chunks, total_points)
+            chunk_queries = xyz_samples[start:end, :]
             chunk_queries = repeat(chunk_queries, "p c -> b p c", b=batch_size)
-            logits = geo_decoder(queries=chunk_queries, latents=latents)
-            batch_logits.append(logits)
-
-        grid_logits = torch.cat(batch_logits, dim=1)
+            grid_logits[:, start:end, :] = geo_decoder(queries=chunk_queries, latents=latents)
         grid_logits = grid_logits.view((batch_size, *grid_size)).float()
 
         return grid_logits
@@ -238,6 +237,18 @@ class HierarchicalVolumeDecoding:
             batch_logits.append(logits)
 
         grid_logits = torch.cat(batch_logits, dim=1).view((batch_size, grid_size[0], grid_size[1], grid_size[2]))
+        # Adapt mc_level to actual grid value range — prevents empty near-surface sets
+        _g = grid_logits.squeeze(0)
+        _lo, _hi = float(_g.min()), float(_g.max())
+        if _hi > _lo:
+            _eps = 1e-4 * (_hi - _lo)
+            if not (_lo + _eps < mc_level < _hi - _eps):
+                import warnings
+                warnings.warn(
+                    f'mc_level={mc_level:.5f} outside grid range [{_lo:.5f}, {_hi:.5f}]; '
+                    f'adapting to midpoint', stacklevel=2
+                )
+                mc_level = (_lo + _hi) / 2
 
         for octree_depth_now in resolutions[1:]:
             grid_size = np.array([octree_depth_now + 1] * 3)
@@ -369,6 +380,18 @@ class FlashVDMVolumeDecoding:
         ).permute(0, 3, 1, 4, 2, 5).contiguous().view(
             (batch_size, grid_size[0], grid_size[1], grid_size[2])
         )
+        # Adapt mc_level to actual grid value range — prevents empty near-surface sets
+        _g = grid_logits.squeeze(0)
+        _lo, _hi = float(_g.min()), float(_g.max())
+        if _hi > _lo:
+            _eps = 1e-4 * (_hi - _lo)
+            if not (_lo + _eps < mc_level < _hi - _eps):
+                import warnings
+                warnings.warn(
+                    f'mc_level={mc_level:.5f} outside grid range [{_lo:.5f}, {_hi:.5f}]; '
+                    f'adapting to midpoint', stacklevel=2
+                )
+                mc_level = (_lo + _hi) / 2
 
         for octree_depth_now in resolutions[1:]:
             grid_size = np.array([octree_depth_now + 1] * 3)
