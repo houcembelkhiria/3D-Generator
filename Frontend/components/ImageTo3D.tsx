@@ -34,10 +34,14 @@ export const ImageTo3D: React.FC<ImageTo3DProps> = ({ onModelGenerated }) => {
 
   useEffect(() => {
     if (!loading) return;
-    setElapsed(0);
     const t0 = Date.now();
-    const id = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
-    return () => clearInterval(id);
+    setElapsed(0);
+    const tick = () => setElapsed(Math.round((Date.now() - t0) / 1000));
+    const id = setInterval(tick, 1000);
+    // Immediately correct the counter when the user returns to this browser tab
+    const onVisible = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
   }, [loading]);
 
   const handleFile = useCallback((file: File) => {
