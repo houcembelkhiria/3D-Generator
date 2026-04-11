@@ -33,6 +33,8 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
   const [elapsed, setElapsed] = useState(0);
   const [generationTime, setGenerationTime] = useState<number | null>(null);
   const fileRefs = useRef<Record<ViewName, HTMLInputElement | null>>({ front: null, back: null, left: null, right: null });
+  const currentUidRef = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
 
   const handleFile = useCallback((view: ViewName, file: File) => {
     const reader = new FileReader();
@@ -53,8 +55,18 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
     return () => clearInterval(id);
   }, [loading]);
 
+  const cancel = async () => {
+    cancelledRef.current = true;
+    const uid = currentUidRef.current;
+    if (uid) {
+      try { await fetch(`${API_BASE}/api/v1/generation/${uid}`, { method: 'DELETE' }); } catch {}
+    }
+    setLoading(false);
+  };
+
   const generate = async () => {
     if (!images.front) return;
+    cancelledRef.current = false;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -85,15 +97,19 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
         throw new Error(err.detail || `HTTP ${submitRes.status}`);
       }
       const { uid } = await submitRes.json();
+      currentUidRef.current = uid;
       let data: any = null;
       while (true) {
         await new Promise(r => setTimeout(r, 2000));
+        if (cancelledRef.current) return;
         const pollRes = await fetch(`${API_BASE}/api/v1/generation-status/${uid}`);
         if (!pollRes.ok) throw new Error(`Poll failed: HTTP ${pollRes.status}`);
         const poll = await pollRes.json();
         if (poll.status === 'completed') { data = poll; break; }
         if (poll.status === 'failed') throw new Error(poll.error || 'Generation failed');
+        if (poll.status === 'cancelled') return;
       }
+      if (cancelledRef.current) return;
       setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
       setGenerationTime(data.generation_time ?? null);
       onModelGenerated?.({
@@ -107,9 +123,10 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
         generationTime: data.generation_time,
       });
     } catch (e: any) {
-      setError(e.message);
+      if (!cancelledRef.current) setError(e.message);
     } finally {
       setLoading(false);
+      currentUidRef.current = null;
     }
   };
 
@@ -237,12 +254,22 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
               ⚡ Draft Mode — fastest (steps=1, res=64, chunks=200k)
             </button>
 
-            <button onClick={generate} disabled={!images.front || loading}
-              className="w-full px-4 py-3 bg-[#FF8C66] hover:bg-[#ff7a4d] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded-xl font-bold transition-all flex items-center justify-center gap-2">
-              {loading
-                ? <><IconLoader className="w-5 h-5 animate-spin" /> Generating... {elapsed}s</>
-                : `Generate from ${viewCount} view${viewCount !== 1 ? 's' : ''}`}
-            </button>
+            {loading ? (
+              <div className="flex gap-2">
+                <button type="button" onClick={cancel}
+                  className="flex-1 px-4 py-3 border border-red-500/60 hover:border-red-500 text-red-400 hover:text-red-300 rounded-xl font-bold transition-all">
+                  ✕ Cancel
+                </button>
+                <div className="flex-1 px-4 py-3 bg-[#FF8C66]/40 text-black/60 rounded-xl font-bold flex items-center justify-center gap-2 cursor-not-allowed">
+                  <IconLoader className="w-5 h-5 animate-spin" /> {elapsed}s
+                </div>
+              </div>
+            ) : (
+              <button onClick={generate} disabled={!images.front || loading}
+                className="w-full px-4 py-3 bg-[#FF8C66] hover:bg-[#ff7a4d] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded-xl font-bold transition-all flex items-center justify-center gap-2">
+                {`Generate from ${viewCount} view${viewCount !== 1 ? 's' : ''}`}
+              </button>
+            )}
 
             {error && <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 p-3 rounded-lg">{error}</p>}
           </div>

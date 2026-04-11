@@ -171,6 +171,15 @@ async def generation_status(uid: str):
     return result
 
 
+@router.delete("/generation/{uid}", summary="Cancel a pending generation job")
+async def cancel_generation(uid: str):
+    if uid not in _pending_results:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if _pending_results[uid] is None:
+        _pending_results[uid] = {"status": "cancelled"}
+    return {"cancelled": True, "status": _pending_results[uid].get("status")}
+
+
 @router.get("/generated-models", summary="List all generated 3D models")
 async def list_generated_models():
     output_dir = Path("generated/3d_outputs")
