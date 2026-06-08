@@ -877,7 +877,7 @@ class Hunyuan3DService:
 
         if not self.has_texgen:
             raise RuntimeError("Texture pipeline not available — enable with HY3D_ENABLE_TEX=true")
-        if not self.has_t2i or self.t2i_pipeline is None:
+        if not self.has_t2i:
             raise RuntimeError("Text-to-image pipeline required — enable with HY3D_ENABLE_T23D=true")
 
         glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
@@ -896,7 +896,8 @@ class Hunyuan3DService:
             mesh = loaded
         mesh.visual = _trimesh.visual.ColorVisuals()
 
-        # Generate reference image from new prompt
+        # Lazy-load t2i pipeline then generate reference image
+        self._ensure_t2i_loaded()
         self._move_to_device("t2i_pipeline")
         t2i_steps = self._resolve_t2i_steps()
         image = self.t2i_pipeline(prompt, seed=seed, num_inference_steps=t2i_steps)
