@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
+import ReactDOM from 'react-dom';
 import { GeneratedModel } from '../types';
 import { ModelViewer3D } from './ModelViewer3D';
 import { IconUpload, IconLoader, IconBox } from './Icons';
@@ -6,6 +7,104 @@ import { API_BASE } from '../api';
 
 const VIEWS = ['front', 'back', 'left', 'right'] as const;
 type ViewName = typeof VIEWS[number];
+const VIEW_HINTS: Record<ViewName, { tips: string[] }> = {
+  front: {
+    tips: [
+      'Object faces directly toward camera',
+      'Center it, filling ~80% of the frame',
+      'Plain white or transparent background',
+      'Most important view — always required',
+    ],
+  },
+  back: {
+    tips: [
+      'Rotate object 180° from the front',
+      'Same height, scale & background as front',
+      'Captures rear details (ports, labels, clasps)',
+    ],
+  },
+  left: {
+    tips: [
+      'Show the LEFT side of the object',
+      'Rotate 90° counter-clockwise from front',
+      'Keep same vertical alignment & scale',
+    ],
+  },
+  right: {
+    tips: [
+      'Show the RIGHT side of the object',
+      'Rotate 90° clockwise from front',
+      'Keep same vertical alignment & scale',
+    ],
+  },
+};
+
+
+
+
+
+const ViewHint: React.FC<{ view: ViewName }> = ({ view }) => {
+  const [open, setOpen]   = useState(false);
+  const [pos,  setPos]    = useState<{ top: number; left: number } | null>(null);
+  const btnRef            = useRef<HTMLButtonElement>(null);
+  const { tips }          = VIEW_HINTS[view];
+
+  const show = () => {
+    if (!btnRef.current) return;
+    const r   = btnRef.current.getBoundingClientRect();
+    const TIP_W = 240;
+    const left  = (view === 'right' || view === 'back')
+      ? Math.max(4, r.right - TIP_W)
+      : Math.min(r.left, window.innerWidth - TIP_W - 4);
+    setPos({ top: r.top + window.scrollY, left });
+    setOpen(true);
+  };
+
+  const tooltip = open && pos ? ReactDOM.createPortal(
+    <div
+      style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999,
+               transform: 'translateY(calc(-100% - 8px))', width: 240 }}
+      className="bg-[var(--bg-card)] border border-[#FF8C66]/40 rounded-xl shadow-2xl overflow-hidden pointer-events-none"
+    >
+      <img
+        src={`/hints/${view}.png`}
+        alt={`${view} view reference`}
+        className="w-full object-cover"
+        style={{ imageRendering: 'auto' }}
+      />
+      <div className="p-2.5">
+        <ul className="space-y-1">
+          {tips.map((tip, i) => (
+            <li key={i} className="flex items-start gap-1.5 text-[11px] text-theme-secondary leading-tight">
+              <span className="text-[#FF8C66] mt-0.5 shrink-0">·</span>
+              {tip}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>,
+    document.body
+  ) : null;
+
+  return (
+    <span className="inline-flex items-center ml-1">
+      <button
+        ref={btnRef}
+        type="button"
+        onMouseEnter={show}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={show}
+        onBlur={() => setOpen(false)}
+        className="w-3.5 h-3.5 rounded-full bg-[var(--bg-tertiary)] border border-theme text-[9px] text-theme-muted hover:text-theme-secondary hover:border-[#FF8C66] transition-colors flex items-center justify-center leading-none"
+        aria-label={`${view} view positioning tip`}
+      >
+        ?
+      </button>
+      {tooltip}
+    </span>
+  );
+};
+
 
 interface MultiViewTo3DProps {
   onModelGenerated?: (model: GeneratedModel) => void;
@@ -20,7 +119,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
   const [error, setError] = useState<string | null>(null);
   // Basic params
   const [texture, setTexture] = useState(false);
-  const [steps, setSteps] = useState(5);
+  const [steps, setSteps] = useState(30);
   const [outputType, setOutputType] = useState('glb');
   // Advanced params
   const [seed, setSeed] = useState(1234);
@@ -127,7 +226,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
       setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
       setGenerationTime(data.generation_time ?? null);
       onModelGenerated?.({
-        id: crypto.randomUUID(),
+        id: data.uid ?? crypto.randomUUID(),
         previewUrl: `${API_BASE}${data.preview_url}`,
         downloadUrl: `${API_BASE}${data.download_url}`,
         format: data.format,
@@ -160,19 +259,22 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
             <div className="grid grid-cols-2 gap-3">
               {VIEWS.map(view => (
                 <div key={view} className="space-y-1">
-                  <span className="text-xs font-medium text-theme-secondary uppercase tracking-wider">
+                  <span className="text-xs font-medium text-theme-secondary uppercase tracking-wider flex items-center">
                     {view} {view === 'front' && <span className="text-[#FF8C66]">*</span>}
+                    <ViewHint view={view} />
                   </span>
                   <div
-                    className="dropzone flex flex-col items-center justify-center p-4 cursor-pointer aspect-square"
+                    className="dropzone relative cursor-pointer aspect-square overflow-hidden"
                     onClick={() => fileRefs.current[view]?.click()}
                     onDrop={(e) => { e.preventDefault(); e.dataTransfer.files[0] && handleFile(view, e.dataTransfer.files[0]); }}
                     onDragOver={(e) => e.preventDefault()}
                   >
                     {images[view] ? (
-                      <img src={images[view]!.preview} alt={view} className="max-h-full rounded object-contain" />
+                      <img src={images[view]!.preview} alt={view} className="absolute inset-0 w-full h-full object-contain p-3" />
                     ) : (
-                      <IconUpload className="w-8 h-8 text-theme-muted" />
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <IconUpload className="w-8 h-8 text-theme-muted" />
+                      </div>
                     )}
                   </div>
                   <input
@@ -259,14 +361,24 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setShowAdvanced(true); }}
-              className="w-full px-3 py-1.5 border border-[#FF8C66]/50 hover:border-[#FF8C66] text-[#FF8C66] text-xs font-bold rounded-xl transition-all"
-              disabled={loading}
-            >
-              ⚡ Draft Mode — fastest (steps=1, res=64, chunks=200k)
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setShowAdvanced(true); }}
+                className="px-3 py-1.5 border border-[#FF8C66]/50 hover:border-[#FF8C66] text-[#FF8C66] text-xs font-bold rounded-xl transition-all"
+                disabled={loading}
+              >
+                ⚡ Draft — steps=1, res=64
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSteps(50); setOctreeResolution(192); setGuidanceScale(5.0); setNumChunks(50000); setShowAdvanced(true); }}
+                className="px-3 py-1.5 border border-[#7C3AED]/50 hover:border-[#7C3AED] text-[#a78bfa] text-xs font-bold rounded-xl transition-all"
+                disabled={loading}
+              >
+                ✦ Quality — steps=50, res=192
+              </button>
+            </div>
 
             {loading ? (
               <div className="flex gap-2">

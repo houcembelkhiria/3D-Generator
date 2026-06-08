@@ -125,7 +125,7 @@ export const ImageTo3D: React.FC<ImageTo3DProps> = ({ onModelGenerated }) => {
       setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
       setGenerationTime(data.generation_time ?? null);
       onModelGenerated?.({
-        id: crypto.randomUUID(),
+        id: data.uid ?? crypto.randomUUID(),
         previewUrl: `${API_BASE}${data.preview_url}`,
         downloadUrl: `${API_BASE}${data.download_url}`,
         format: data.format,

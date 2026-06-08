@@ -109,7 +109,7 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
       setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
       setGenerationTime(data.generation_time ?? null);
       onModelGenerated?.({
-        id: crypto.randomUUID(),
+        id: data.uid ?? crypto.randomUUID(),
         previewUrl: `${API_BASE}${data.preview_url}`,
         downloadUrl: `${API_BASE}${data.download_url}`,
         format: data.format,
