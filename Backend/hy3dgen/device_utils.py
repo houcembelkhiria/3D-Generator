@@ -2,6 +2,10 @@
 Centralized device management for cross-platform optimal performance.
 Works on CUDA GPUs, Apple Silicon (MPS), and CPU-only machines.
 """
+import os as _os
+# Allow MPS operations that aren't implemented in Metal to fall back to CPU
+# instead of hard-crashing. Universally recommended for Mac AI pipelines.
+_os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import platform
 from contextlib import contextmanager
 from dataclasses import dataclass

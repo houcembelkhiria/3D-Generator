@@ -60,6 +60,8 @@ class TextTo3DRequest(BaseModel):
     texture: bool = False
     face_count: int = Field(20000, ge=100)
     type: str = Field("glb")
+    t2i_model: str = Field("hyper_sdxl", pattern="^(hyper_sdxl|hunyuan)$",
+                           description="T2I backend: hyper_sdxl (default, fast English) or hunyuan (bilingual fallback)")
 
 
 class MultiViewTo3DRequest(BaseModel):
@@ -323,17 +325,26 @@ async def find_similar_models(body: ImageTo3DRequest):
 # --- Async submission endpoints ---
 
 # Stores results from background generation jobs: uid -> result dict | None (still running)
+# Capped at 500 entries to prevent unbounded growth on long-running servers.
 _pending_results: dict = {}
+_PENDING_MAX = 500
 
 
 def _run_in_background(fn, uid, **kwargs):
     _pending_results[uid] = None  # marks job as in-progress
     try:
         result = fn(**kwargs)
-        _pending_results[uid] = {"status": "completed", **result}
+        # Don't overwrite a cancellation that arrived while we were running
+        if _pending_results.get(uid) != {"status": "cancelled"}:
+            _pending_results[uid] = {"status": "completed", **result}
     except Exception as exc:
         logger.exception("Background generation %s failed", uid)
-        _pending_results[uid] = {"status": "failed", "error": str(exc)}
+        if _pending_results.get(uid) != {"status": "cancelled"}:
+            _pending_results[uid] = {"status": "failed", "error": str(exc)}
+    finally:
+        # Evict oldest entries when the dict grows too large
+        while len(_pending_results) > _PENDING_MAX:
+            _pending_results.pop(next(iter(_pending_results)))
 
 
 @router.post("/image-to-3d/async", summary="Submit async image-to-3d job")
@@ -362,7 +373,7 @@ async def text_to_3d_async(body: TextTo3DRequest):
         return svc.text_to_3d(text=body.text, seed=body.seed, steps=body.num_inference_steps,
                        guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
                        num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
-                       output_type=body.type)
+                       output_type=body.type, t2i_model=body.t2i_model)
 
     threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)

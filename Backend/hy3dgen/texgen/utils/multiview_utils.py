@@ -87,10 +87,10 @@ class Multiview_Diffusion_Net():
         kwargs["position_imgs"] = position_image
 
         import sys, time
-        sys.stderr.write(f"\n[MV] Calling pipeline (device={self.pipeline.device}, dtype={self.dtype}, steps=30)...\n")
+        sys.stderr.write(f"\n[MV] CPU inference (25 steps, fp32, {len(control_images)//2} views)...\n")
         sys.stderr.flush()
         t0 = time.time()
-        mvd_image = self.pipeline(input_image, num_inference_steps=30, **kwargs).images
+        mvd_image = self.pipeline(input_image, num_inference_steps=25, **kwargs).images
         for _vi, _vimg in enumerate(mvd_image):
             _varr = np.array(_vimg)
             _mask = _varr[:,:,:3].sum(axis=2) < 700

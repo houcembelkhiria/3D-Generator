@@ -19,9 +19,12 @@ class Hunyuan3DTexGenConfig:
         self.device = device
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
-        self.candidate_camera_azims = [0, 90, 180, 270]
-        self.candidate_camera_elevs = [0, 0, 0, 0]
-        self.candidate_view_weights = [1, 0.1, 0.5, 0.1]
+        # 6 views matching working fork (Hunyuan3D-2GP). Top/bottom carry low
+        # weight (0.05 each) but close coverage gaps so the back doesn't depend
+        # entirely on inpainting from front-view colours.
+        self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
+        self.candidate_camera_elevs = [0, 0, 0, 0, 90, -90]
+        self.candidate_view_weights = [1, 0.1, 0.5, 0.1, 0.05, 0.05]
         self.render_size = 2048
         self.texture_size = 2048
         self.bake_exp = 4
@@ -123,8 +126,21 @@ class Hunyuan3DPaintPipeline:
         new_image.paste(cropped_image, (paste_x, paste_y))
         return new_image
 
+    # Maps texgen camera azimuth (elev=0) → user view name.
+    # Front is already the primary `image` input so we only substitute the others.
+    _AZIM_TO_VIEW = {90: 'right', 180: 'back', 270: 'left'}
+
     @torch.inference_mode()
-    def __call__(self, mesh, image):
+    def __call__(self, mesh, image, user_views=None):
+        """
+        Args:
+            mesh: trimesh.Trimesh
+            image: front-view PIL image (used for delight + multiview seed)
+            user_views: optional dict of {view_name: PIL.Image} from a multiview
+                        capture. When provided, generated views at matching azimuths
+                        are replaced with the user's actual images, giving accurate
+                        back/left/right texture instead of AI-hallucinated colours.
+        """
         import sys, time as _time
         _t0 = _time.time()
         _last = [_t0]
@@ -140,12 +156,6 @@ class Hunyuan3DPaintPipeline:
         image_prompt = self.recenter_image(image_prompt)
         trace("Running delight (CPU + 50 steps, working fork config)...")
         image_prompt = self.models['delight_model'](image_prompt)
-        try:
-            _dbg = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
-            os.makedirs(_dbg, exist_ok=True)
-            image_prompt.save(os.path.join(_dbg, 'delight_output.png'))
-        except Exception:
-            pass
         try:
             _dbg = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
             os.makedirs(_dbg, exist_ok=True)
@@ -176,6 +186,24 @@ class Hunyuan3DPaintPipeline:
         trace("Resizing multiviews...")
         for i in range(len(multiviews)):
             multiviews[i] = multiviews[i].resize((self.config.render_size, self.config.render_size))
+
+        # Substitute user-provided views where available (back/left/right).
+        # This replaces AI-hallucinated texture with the user's actual images,
+        # which matters most for the back (weight=0.5) and sides (weight=0.1).
+        if user_views:
+            for i, (azim, elev) in enumerate(zip(selected_camera_azims, selected_camera_elevs)):
+                if elev != 0:
+                    continue
+                view_name = self._AZIM_TO_VIEW.get(azim)
+                if view_name and view_name in user_views:
+                    try:
+                        user_img = self.recenter_image(user_views[view_name])
+                        user_img = user_img.convert('RGB').resize(
+                            (self.config.render_size, self.config.render_size))
+                        multiviews[i] = user_img
+                        trace(f"Substituted {view_name} view (azim={azim}°) with user image")
+                    except Exception as _e:
+                        trace(f"Warning: could not substitute {view_name} view: {_e}")
 
         trace("Baking from multiviews...")
         texture, mask = self.bake_from_multiview(multiviews,

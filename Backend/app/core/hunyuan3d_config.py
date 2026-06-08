@@ -38,6 +38,8 @@ class Hunyuan3DSettings:
 
     # Text-to-image bridge
     enable_t23d: bool = field(default_factory=lambda: os.environ.get("HY3D_ENABLE_T23D", "true").lower() == "true")
+    # T2I model: "hyper_sdxl" (Hyper-SDXL 4-step, default, English-oriented) or "hunyuan" (HunyuanDiT v1.2-Distilled, bilingual fallback)
+    t2i_model: str = field(default_factory=lambda: os.environ.get("HY3D_T2I_MODEL", "hyper_sdxl").lower())
 
     # Performance
     enable_quantization: bool = field(default_factory=lambda: os.environ.get('HY3D_QUANTIZE', 'false').lower() == 'true')

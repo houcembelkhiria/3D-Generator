@@ -15,14 +15,15 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
   const [error, setError] = useState<string | null>(null);
   // Basic params
   const [texture, setTexture] = useState(false);
-  const [steps, setSteps] = useState(5);
+  const [steps, setSteps] = useState(20);
   const [outputType, setOutputType] = useState('glb');
   // Advanced params
   const [seed, setSeed] = useState(1234);
   const [guidanceScale, setGuidanceScale] = useState(5.0);
-  const [octreeResolution, setOctreeResolution] = useState(128);
+  const [octreeResolution, setOctreeResolution] = useState(192);
   const [numChunks, setNumChunks] = useState(50000);
   const [faceCount, setFaceCount] = useState(20000);
+  const [t2iModel, setT2iModel] = useState('hunyuan');
   const [showAdvanced, setShowAdvanced] = useState(false);
   // UI
   const [elapsed, setElapsed] = useState(0);
@@ -72,6 +73,7 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
           texture,
           face_count: faceCount,
           type: outputType,
+          t2i_model: t2iModel,
         }),
       });
       if (!submitRes.ok) {
@@ -172,6 +174,14 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
 
             {showAdvanced && (
               <div className="grid grid-cols-2 gap-3 p-3 bg-[var(--bg-tertiary)] rounded-xl border border-theme">
+                <label className="flex flex-col gap-1 text-xs text-theme-secondary col-span-2">
+                  Text-to-Image Model
+                  <select value={t2iModel} onChange={(e) => setT2iModel(e.target.value)}
+                    className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
+                    <option value="hyper_sdxl">Hyper-SDXL 4-step — fast, guidance disabled (CFG=0)</option>
+                    <option value="hunyuan">HunyuanDiT v1.2 — slower, text-guided (CFG=6) ✓ recommended</option>
+                  </select>
+                </label>
                 <label className="flex flex-col gap-1 text-xs text-theme-secondary">
                   Seed
                   <div className="flex gap-1">
@@ -226,6 +236,15 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
               disabled={loading}
             >
               ⚡ Draft Mode — fastest (steps=1, res=64, chunks=200k)
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setSteps(30); setOctreeResolution(192); setNumChunks(100000); setT2iModel('hunyuan'); setShowAdvanced(true); }}
+              className="w-full px-3 py-1.5 border border-[#7C3AED]/50 hover:border-[#7C3AED] text-[#a78bfa] text-xs font-bold rounded-xl transition-all"
+              disabled={loading}
+            >
+              ⬆ Quality Mode — best detail (steps=30, res=192, chunks=100k)
             </button>
 
             {loading ? (
