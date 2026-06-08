@@ -108,17 +108,18 @@ class HunyuanDiTPipeline:
         # - centered, single subject, clean white bg → shape-gen sees a clear volume
         # - English keywords work better for diverse prompts than Chinese-only tags
         self.pos_txt = (
-            ", single centered object, eye-level view, 3/4 front angle, "
-            "clean white background, studio lighting, high detail, accurate proportions, "
-            "3D render style, best quality, 白色背景, 正确比例, 3D风格, 最佳质量"
+            ", isolated single object, centered, 3/4 front angle, eye-level view, "
+            "pure white background, no shadows, no ground plane, studio lighting, "
+            "high detail, sharp edges, accurate proportions, photorealistic 3D render, best quality"
         )
         self.neg_txt = (
-            "multiple objects, cluttered, complex scene, busy background, "
-            "text, watermark, logo, signature, low quality, blurry, noisy, "
-            "deformed, cropped, out of frame, extra limbs, mutated, disfigured, "
-            "文本, 特写, 裁剪, 出框, 最差质量, 低质量, JPEG伪影, 重复, 病态, "
-            "残缺, 多余的手指, 变异的手, 画得不好的手, 画得不好的脸, 变异, 畸形, 模糊, "
-            "糟糕的比例, 多余的肢体, 融合的手指, 手指太多, 长脖子"
+            "multiple objects, background clutter, busy scene, "
+            "shadows, ground shadow, floor reflection, environment background, "
+            "text, watermark, logo, signature, "
+            "low quality, blurry, noisy, JPEG artifacts, duplicate, "
+            "deformed, mutated, disfigured, extra limbs, extra fingers, mutated hands, "
+            "poorly drawn hands, poorly drawn face, bad proportions, fused fingers, long neck, "
+            "cropped, out of frame, partial view, 2D, flat, illustration, cartoon, painting, sketch"
         )
 
     def compile(self):
@@ -128,8 +129,8 @@ class HunyuanDiTPipeline:
         # self.pipe.vae.decode = torch.compile(self.pipe.vae.decode, fullgraph=True)
         generator = torch.Generator(device=self.pipe.device)  # infer once for hot-start
         out_img = self.pipe(
-            prompt='美少女战士',#to do replace with english and test
-            negative_prompt='模糊',
+            prompt='sailor moon',
+            negative_prompt='blurry',
             num_inference_steps=15,
             pag_scale=1.3,
             width=1024,
@@ -174,13 +175,16 @@ class SDXLHyperPipeline:
     """
 
     POS_TEMPLATE = (
-        ", centered, eye-level view, 3/4 front angle, clean white background, "
-        "studio lighting, high detail, accurate proportions, 3D render style, best quality"
+        ", isolated single object, centered, 3/4 front angle, eye-level view, "
+        "pure white background, no shadows, no ground plane, studio lighting, "
+        "high detail, sharp edges, accurate proportions, photorealistic 3D render, best quality"
     )
     NEG_PROMPT = (
         "blurry, low quality, low resolution, noisy, deformed, multiple objects, "
         "cluttered, complex background, text, watermark, logo, signature, "
-        "extra limbs, mutated, disfigured, cropped, out of frame"
+        "shadows, ground shadow, floor reflection, environment background, "
+        "extra limbs, mutated, disfigured, cropped, out of frame, partial view, "
+        "2D, flat, illustration, cartoon, painting, sketch"
     )
 
     def __init__(
