@@ -882,6 +882,59 @@ def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None, vector_store: O
     _service = Hunyuan3DService(settings, vector_store=vector_store)
     return _service
 
+    def retexture(self, uid: str, prompt: str = "", seed: int = 0, out_type: str = "glb") -> dict:
+        """Re-apply texture to an existing mesh from a new text-guided reference image."""
+        import trimesh as _trimesh
+
+        if not self.has_texgen:
+            raise RuntimeError("Texture pipeline not available — enable with HY3D_ENABLE_TEX=true")
+        if not self.has_t2i or self.t2i_pipeline is None:
+            raise RuntimeError("Text-to-image pipeline required — enable with HY3D_ENABLE_T23D=true")
+
+        glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
+        if not glb_path.exists():
+            raise FileNotFoundError(f"Mesh not found: {uid}")
+
+        _t_start = time.time()
+        new_uid = uuid.uuid4()
+
+        # Load geometry, strip existing textures so texgen starts clean
+        loaded = _trimesh.load(str(glb_path), force="mesh")
+        if isinstance(loaded, _trimesh.Scene):
+            meshes = [g for g in loaded.geometry.values() if isinstance(g, _trimesh.Trimesh)]
+            mesh = _trimesh.util.concatenate(meshes) if len(meshes) > 1 else meshes[0]
+        else:
+            mesh = loaded
+        mesh.visual = _trimesh.visual.ColorVisuals()
+
+        # Generate reference image from new prompt
+        self._move_to_device("t2i_pipeline")
+        t2i_steps = self._resolve_t2i_steps()
+        image = self.t2i_pipeline(prompt, seed=seed, num_inference_steps=t2i_steps)
+        logger.info("Retexture: t2i took %.1f s", time.time() - _t_start)
+        self._offload_to_cpu("t2i_pipeline")
+
+        clean_image = self._remove_background(image)
+
+        # Apply texture pipeline to existing mesh
+        self._ensure_texgen_loaded()
+        if self._dm.is_gpu:
+            self._offload_to_cpu("i23d_pipeline")
+            self._move_texgen_to_device()
+        t0 = time.time()
+        with torch.inference_mode():
+            mesh = self.texgen_pipeline(mesh, clean_image)
+        logger.info("Retexture: texgen took %.1f s", time.time() - t0)
+        if self._dm.is_gpu:
+            self._offload_texgen_to_cpu()
+
+        result = self._export_mesh(mesh, new_uid, out_type, include_normals=True)
+        result["generation_time"] = round(time.time() - _t_start, 1)
+        result["retextured_from"] = uid
+
+        empty_cache()
+        return result
+
 
 def get_hunyuan3d() -> Hunyuan3DService:
     assert _service is not None, "Hunyuan3DService not initialized. Call init_hunyuan3d() first."

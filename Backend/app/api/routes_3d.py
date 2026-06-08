@@ -82,6 +82,12 @@ class MultiViewTo3DRequest(BaseModel):
     type: str = Field("glb")
 
 
+class RetextureRequest(BaseModel):
+    prompt: str = Field("", description="Describe the desired texture / appearance")
+    seed: int = Field(1234, ge=0)
+    type: str = Field("glb")
+
+
 # --- Endpoints ---
 
 @router.post("/image-to-3d", summary="Generate 3D model from image")
@@ -510,6 +516,30 @@ async def multiview_to_3d_async(body: MultiViewTo3DRequest):
 
     threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "multiview-to-3d"}, daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
+
+
+@router.post("/retexture/{uid}/async", summary="Re-apply texture to existing mesh from new prompt")
+async def retexture_async(uid: str, body: RetextureRequest):
+    import re as _re
+    if not _re.fullmatch(r'[a-zA-Z0-9_\-]+', uid):
+        raise HTTPException(status_code=400, detail="Invalid model id")
+    glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
+    if not glb_path.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+    svc = get_hunyuan3d()
+    if not svc.has_texgen:
+        raise HTTPException(status_code=503, detail="Texture pipeline not available")
+    if not svc.has_t2i:
+        raise HTTPException(status_code=503, detail="Text-to-image pipeline required for retexture")
+    new_uid = str(uuid.uuid4())
+    def run():
+        return svc.retexture(uid=uid, prompt=body.prompt, seed=body.seed, out_type=body.type)
+    threading.Thread(
+        target=_run_in_background, args=(run, new_uid),
+        kwargs={"source": "retexture", "prompt": body.prompt},
+        daemon=True,
+    ).start()
+    return JSONResponse({"uid": new_uid, "status": "processing"}, status_code=202)
 
 
 @router.delete("/models/{uid}", summary="Delete a generated model file from disk")

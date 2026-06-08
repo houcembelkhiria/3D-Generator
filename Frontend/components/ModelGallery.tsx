@@ -93,6 +93,11 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [refinePrompt, setRefinePrompt] = useState('');
+  const [refineMode, setRefineMode] = useState<'regenerate' | 'retexture'>('regenerate');
+  const [refineJobUid, setRefineJobUid] = useState<string | null>(null);
+  const [refineStage, setRefineStage] = useState<string | null>(null);
+  const [refineError, setRefineError] = useState<string | null>(null);
   const [status, setStatus] = useState<LauncherStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
@@ -116,7 +121,65 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [unityMenuFor]);
 
-  const install = useCallback(async () => {
+  // Poll refine job until done
+  useEffect(() => {
+    if (!refineJobUid) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/v1/generation-status/${refineJobUid}`);
+        const data = await r.json();
+        const stage = data?.stage ?? data?.status ?? 'processing';
+        if (!active) return;
+        setRefineStage(stage);
+        if (stage === 'completed' || stage === 'failed' || stage === 'cancelled') {
+          setRefineJobUid(null);
+          if (stage === 'failed') setRefineError(data?.error ?? 'Generation failed');
+        } else {
+          setTimeout(poll, 1200);
+        }
+      } catch {
+        if (active) setTimeout(poll, 2000);
+      }
+    };
+    poll();
+    return () => { active = false; };
+  }, [refineJobUid]);
+
+  const submitRefine = useCallback(async (model: GeneratedModel) => {
+    setRefineError(null);
+    setRefineStage('starting');
+    try {
+      if (refineMode === 'retexture') {
+        const r = await fetch(`${API_BASE}/api/v1/retexture/${model.id}/async`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: refinePrompt, seed: 1234 }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail ?? `HTTP ${r.status}`);
+        setRefineJobUid(data.uid);
+      } else {
+        const combinedPrompt = [model.prompt, refinePrompt].filter(Boolean).join(', ');
+        const endpoint = model.source === 'text-to-3d'
+          ? '/api/v1/text-to-3d/async'
+          : '/api/v1/text-to-3d/async';
+        const r = await fetch(`${API_BASE}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: combinedPrompt }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail ?? `HTTP ${r.status}`);
+        setRefineJobUid(data.uid);
+      }
+    } catch (e: any) {
+      setRefineStage(null);
+      setRefineError(e?.message ?? String(e));
+    }
+  }, [refineMode, refinePrompt]);
+
+    const install = useCallback(async () => {
     setInstalling(true);
     setInstallError(null);
     try {
@@ -407,6 +470,69 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
                     {installing ? 'Setting up…' : 'Open in Unity · Current scene'}
                   </button>
                 </div>
+              )}
+            </div>
+
+            {/* ── Refine panel ── */}
+            <div className="border-t border-theme p-4 space-y-3">
+              <p className="text-xs font-semibold text-theme-muted uppercase tracking-wide">Refine this model</p>
+
+              {/* Mode toggle */}
+              <div className="flex gap-2">
+                {(['regenerate', 'retexture'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setRefineMode(mode)}
+                    className={`flex-1 py-1.5 text-xs rounded-lg font-medium transition-all border ${
+                      refineMode === mode
+                        ? 'bg-[#FF8C66]/20 border-[#FF8C66]/60 text-[#FF8C66]'
+                        : 'border-theme text-theme-muted hover:text-theme-primary'
+                    }`}
+                  >
+                    {mode === 'regenerate' ? 'Re-generate' : 'Retexture only'}
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[11px] text-theme-muted">
+                {refineMode === 'regenerate'
+                  ? 'Appends your description to the original prompt and re-generates the full model.'
+                  : 'Keeps the existing mesh shape, applies new textures from your description.'}
+              </p>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder={refineMode === 'regenerate' ? 'e.g. "with wings, more detailed"' : 'e.g. "red metallic surface"'}
+                  value={refinePrompt}
+                  onChange={e => setRefinePrompt(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && refinePrompt.trim() && !refineJobUid) submitRefine(selectedModel!); }}
+                  disabled={!!refineJobUid}
+                  className="flex-1 bg-[var(--bg-input)] border border-theme rounded-lg px-3 py-1.5 text-sm text-theme-primary placeholder-theme-muted focus:outline-none focus:border-[#FF8C66]/60 disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  disabled={!refinePrompt.trim() || !!refineJobUid}
+                  onClick={() => submitRefine(selectedModel!)}
+                  className="px-4 py-1.5 bg-[#FF8C66] hover:bg-[#e07555] text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-40"
+                >
+                  {refineJobUid ? '…' : 'Go'}
+                </button>
+              </div>
+
+              {refineStage && refineStage !== 'completed' && (
+                <div className="flex items-center gap-2 text-xs text-theme-muted">
+                  <span className="inline-block w-2 h-2 rounded-full bg-[#FF8C66] animate-pulse" />
+                  {refineStage === 'starting' ? 'Starting…' : `${refineStage}…`}
+                  <span className="ml-auto text-[10px]">New model will appear in gallery when done</span>
+                </div>
+              )}
+              {refineStage === 'completed' && (
+                <p className="text-xs text-emerald-400">Done — check the gallery for your refined model.</p>
+              )}
+              {refineError && (
+                <p className="text-xs text-red-400">{refineError}</p>
               )}
             </div>
           </div>
