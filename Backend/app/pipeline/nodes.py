@@ -172,8 +172,11 @@ def validate_mesh_node(state: Pipeline3DState) -> dict:
 
 
 def store_result_node(state: Pipeline3DState) -> dict:
+    from app.services import gallery_db
+
     spec = state.get("spec") or {}
     mesh_output = state.get("mesh_output") or {}
+    uid = mesh_output.get("uid")
 
     model_info = {
         "model_id": f"model_{int(datetime.now().timestamp())}",
@@ -182,10 +185,23 @@ def store_result_node(state: Pipeline3DState) -> dict:
         "preview_url": mesh_output.get("preview_url"),
         "download_url": mesh_output.get("download_url"),
         "format": mesh_output.get("format", "glb"),
-        "uid": mesh_output.get("uid"),
+        "uid": uid,
         "generation_time": datetime.now().isoformat(),
         "pipeline": "langgraph",
         "errors": state.get("errors", []),
     }
+
+    if uid:
+        try:
+            gallery_db.insert(
+                uid=uid,
+                prompt=spec.get("description", ""),
+                source="pipeline",
+                preview_url=mesh_output.get("preview_url", ""),
+                download_url=mesh_output.get("download_url", ""),
+            )
+        except Exception:
+            logger.exception("gallery_db: failed to save pipeline result %s", uid)
+
     logger.info("Pipeline: complete | model_id=%s", model_info["model_id"])
     return {"model_info": model_info, "current_step": "done"}

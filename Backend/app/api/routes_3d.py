@@ -100,6 +100,7 @@ async def image_to_3d(body: ImageTo3DRequest):
             face_count=body.face_count,
             output_type=body.type,
         )
+        _persist_to_gallery(result["uid"], result, source="image-to-3d")
         return JSONResponse(result, status_code=200)
     except Exception as exc:
         logger.exception("Image-to-3D failed")
@@ -124,6 +125,7 @@ async def text_to_3d(body: TextTo3DRequest):
             face_count=body.face_count,
             output_type=body.type,
         )
+        _persist_to_gallery(result["uid"], result, prompt=body.text, source="text-to-3d")
         return JSONResponse(result, status_code=200)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -158,6 +160,7 @@ async def multiview_to_3d(body: MultiViewTo3DRequest):
             face_count=body.face_count,
             output_type=body.type,
         )
+        _persist_to_gallery(result["uid"], result, source="multiview-to-3d")
         return JSONResponse(result, status_code=200)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -400,17 +403,13 @@ _PENDING_MAX = 500
 _progress: dict = {}
 
 
-def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
-    _pending_results[uid] = None  # marks job as in-progress
-    _progress[uid] = {"stage": "started", "pct": 0}
-    try:
-        _progress[uid] = {"stage": "generating", "pct": 10}
-        result = fn(**kwargs)
 
-        # Compute file stats (Feature 4)
-        glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
-        if glb_path.exists():
-            result["file_size_mb"] = round(glb_path.stat().st_size / (1024 * 1024), 2)
+def _persist_to_gallery(uid: str, result: dict, prompt: str = "", source: str = "image-to-3d") -> None:
+    """Compute file stats then write one row to gallery DB."""
+    glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
+    if glb_path.exists():
+        result.setdefault("file_size_mb", round(glb_path.stat().st_size / (1024 * 1024), 2))
+        if "face_count" not in result:
             try:
                 import trimesh
                 mesh = trimesh.load(str(glb_path))
@@ -422,26 +421,32 @@ def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
                     )
             except Exception:
                 pass
+    try:
+        gallery_db.insert(
+            uid=uid,
+            prompt=prompt,
+            source=source,
+            preview_url=result.get("preview_url", ""),
+            download_url=result.get("download_url", ""),
+            generation_time=result.get("generation_time"),
+            face_count=result.get("face_count"),
+            file_size_mb=result.get("file_size_mb"),
+        )
+    except Exception:
+        logger.exception("gallery_db: failed to save %s", uid)
+
+def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
+    _pending_results[uid] = None  # marks job as in-progress
+    _progress[uid] = {"stage": "started", "pct": 0}
+    try:
+        _progress[uid] = {"stage": "generating", "pct": 10}
+        result = fn(**kwargs)
 
         # Don't overwrite a cancellation that arrived while we were running
         if _pending_results.get(uid) != {"status": "cancelled"}:
+            _persist_to_gallery(uid, result, prompt=prompt, source=source)
             _pending_results[uid] = {"status": "completed", **result}
             _progress[uid] = {"stage": "completed", "pct": 100, **result}
-
-            # Gallery persistence — SQLite
-            try:
-                gallery_db.insert(
-                    uid=uid,
-                    prompt=prompt,
-                    source=source,
-                    preview_url=result.get("preview_url", ""),
-                    download_url=result.get("download_url", ""),
-                    generation_time=result.get("generation_time"),
-                    face_count=result.get("face_count"),
-                    file_size_mb=result.get("file_size_mb"),
-                )
-            except Exception:
-                logger.exception("Failed to save gallery entry for %s", uid)
 
     except Exception as exc:
         logger.exception("Background generation %s failed", uid)
