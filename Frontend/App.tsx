@@ -646,6 +646,7 @@ export default function App() {
             <ModelGallery
               models={generatedModels}
               onRemove={handleModelRemove}
+              hasT2i={systemStatus.hasT2i}
               onSpawn={() => {
                 if (spawnTimerRef.current) clearTimeout(spawnTimerRef.current);
                 setSpawnMsg('Sent to Unity — the model is downloading and importing. This can take 10–30 s; check the Unity Console if it doesn\'t appear.');

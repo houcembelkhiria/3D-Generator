@@ -57,6 +57,7 @@ interface ModelGalleryProps {
   models: GeneratedModel[];
   onRemove?: (id: string) => void;
   onSpawn?: () => void;
+  hasT2i?: boolean;
 }
 
 const sourceLabels: Record<GeneratedModel['source'], string> = {
@@ -87,7 +88,7 @@ function fmtTime(s?: number): string | null {
   return `${s}s`;
 }
 
-export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, onSpawn }) => {
+export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, onSpawn, hasT2i = false }) => {
   const [selectedModel, setSelectedModel] = useState<GeneratedModel | null>(null);
   const [unityMenuFor, setUnityMenuFor] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -412,7 +413,7 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
       {/* Full-screen viewer modal */}
       {selectedModel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setSelectedModel(null)}>
-          <div className="bg-[var(--bg-card)] rounded-2xl border border-theme shadow-2xl w-full max-w-3xl m-4 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[var(--bg-card)] rounded-2xl border border-theme shadow-2xl w-full max-w-3xl m-4 overflow-y-auto max-h-[92vh]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-theme">
               <div className="flex items-center gap-3">
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${sourceColors[selectedModel.source]}`}>
@@ -479,20 +480,27 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
 
               {/* Mode toggle */}
               <div className="flex gap-2">
-                {(['regenerate', 'retexture'] as const).map(mode => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setRefineMode(mode)}
-                    className={`flex-1 py-1.5 text-xs rounded-lg font-medium transition-all border ${
-                      refineMode === mode
-                        ? 'bg-[#FF8C66]/20 border-[#FF8C66]/60 text-[#FF8C66]'
-                        : 'border-theme text-theme-muted hover:text-theme-primary'
-                    }`}
-                  >
-                    {mode === 'regenerate' ? 'Re-generate' : 'Retexture only'}
-                  </button>
-                ))}
+                {(['regenerate', 'retexture'] as const).map(mode => {
+                  const disabled = mode === 'retexture' && !hasT2i;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => !disabled && setRefineMode(mode)}
+                      title={disabled ? 'Requires HY3D_ENABLE_T23D=true on the backend' : undefined}
+                      className={`flex-1 py-1.5 text-xs rounded-lg font-medium transition-all border ${
+                        disabled
+                          ? 'border-theme text-theme-muted opacity-40 cursor-not-allowed'
+                          : refineMode === mode
+                          ? 'bg-[#FF8C66]/20 border-[#FF8C66]/60 text-[#FF8C66]'
+                          : 'border-theme text-theme-muted hover:text-theme-primary'
+                      }`}
+                    >
+                      {mode === 'regenerate' ? 'Re-generate' : 'Retexture only'}
+                    </button>
+                  );
+                })}
               </div>
 
               <p className="text-[11px] text-theme-muted">
