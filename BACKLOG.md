@@ -1,8 +1,8 @@
-# Backlog PFE : Génération d'Objets 3D et Serveur MCP Unity
+# Backlog PFE : Génération d'Objets 3D et Intégration Unity Editor
 
 ## Vue d'ensemble
 
-Le planning est dense. La phase MCP est intégrée comme une **évolution majeure** en fin de parcours pour transformer le projet d'un simple "générateur" en un **"assistant intelligent"**.
+Le planning est dense. La phase d'intégration Unity est le livrable le plus original du projet : un clic suffit pour qu'un modèle généré apparaisse dans Unity Editor sans aucune manipulation manuelle.
 
 ---
 
@@ -45,16 +45,16 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
 
 ---
 
-## Phase 4 : Serveur MCP Unity - L'Intégration Agentique
+## Phase 4 : Intégration Unity Editor
 
-**Objectif :** Remplacer l'import manuel par un pilotage automatique via MCP.
+**Objectif :** Remplacer l'import manuel par un pont REST + JSON automatique.
 
 | ID | User Story | Description |
 |----|------------|-------------|
-| US-4.1 | [MCP Python] Client MCP | Implémenter un Client MCP dans le microservice Python (utilisant le SDK mcp) |
-| US-4.2 | [MCP Unity] Serveur MCP C# | Développer (ou adapter unity-mcp) un Serveur MCP en C# dans Unity qui écoute sur un port WebSocket/Stdio |
-| US-4.3 | Définition des Outils Unity | Définir les "Outils" Unity exposés à l'IA :<br>- `SpawnGLB(url, position)`<br>- `CreatePrimitive(type, scale)`<br>- `LogMessage(text)` |
-| US-4.4 | [Orchestration] Connexion pipeline | Connecter le pipeline de fin de génération (Celery) à l'appel d'outil MCP. Dès que le fichier est prêt, l'ordre d'import est envoyé |
+| US-4.1 | [API Python] Endpoint spawn | `POST /api/v1/unity/spawn` écrit un fichier JSON dans `SpawnRequests/` |
+| US-4.2 | [Unity C#] SpawnBridge | Script éditeur `SpawnBridge.cs` poll `SpawnRequests/` toutes les 500 ms et importe le GLB via glTFast |
+| US-4.3 | Spawn depuis la galerie | Bouton « Open in Unity » dans la galerie frontend appelle l'endpoint spawn |
+| US-4.4 | [Orchestration] Galerie → Unity | Modèle généré disponible en galerie, spawn Unity déclenché par un clic |
 
 ---
 
@@ -64,9 +64,9 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
 
 | ID | User Story | Description |
 |----|------------|-------------|
-| US-5.1 | [Unity] Moniteur IA | Créer une fenêtre "Moniteur IA" dans Unity pour voir les logs de réception MCP |
+| US-5.1 | [UX] Lanceur URI | Lanceur `unity3dgen://` + installation automatique (macOS) |
 | US-5.2 | Test de bout en bout | Test complet : Email → Extraction → Génération → Apparition dans Unity sans clic |
-| US-5.3 | Documentation | Rédaction du mémoire et documentation technique de l'architecture MCP |
+| US-5.3 | Documentation | Rédaction du mémoire et documentation technique de l'intégration Unity |
 | US-5.4 | [Optim] Nettoyage et optimisation | Nettoyage du code et optimisation de la VRAM |
 
 ---
@@ -79,9 +79,9 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
 | 2 | 2 | US-1.4, US-2.1, US-2.2 | Endpoint d'upload asynchrone et intégration initiale du LLM (Llama-3) avec la contrainte de sortie JSON |
 | 3 | 2 | US-2.3, US-2.4, US-3.1 | Finalisation de l'extraction de métadonnées complexes (tableaux), validation Pydantic, et intégration du modèle TripoSR (Text-to-Mesh) |
 | 4 | 2 | US-3.2, US-3.3, US-3.4 | Développement du pipeline alternatif de génération de scripts C# procéduraux, conversion et gestion du stockage des assets (.glb) |
-| 5 | 2 | US-4.1, US-4.2, US-4.3 | Implémentation du Client MCP (Python SDK) et du Serveur MCP (Unity C#) avec la définition des premiers "Outils" Unity |
-| 6 | 2 | US-4.4, US-5.1, US-5.2 | Connexion du pipeline de génération à l'appel d'outil MCP (Orchestration), création du "Moniteur IA" dans Unity, et test de bout en bout complet |
-| 7 | 2 | US-5.3 | Focus : Rédaction du mémoire de fin d'études et de la documentation technique de l'architecture MCP |
+| 5 | 2 | US-4.1, US-4.2, US-4.3 | Endpoint REST `/unity/spawn`, script `SpawnBridge.cs` et bouton galerie « Open in Unity » |
+| 6 | 2 | US-4.4, US-5.1, US-5.2 | Galerie → spawn Unity, lanceur URI macOS, test de bout en bout |
+| 7 | 2 | US-5.3 | Focus : Rédaction du mémoire de fin d'études et de la documentation technique |
 | 8 | 2 | US-5.4, Révision, Polissage | Nettoyage final du code, optimisation de la VRAM et révision/polissage général avant la livraison |
 
 **Durée totale :** 16 semaines
@@ -100,12 +100,11 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
 | Code C# | Qwen/Qwen2.5-Coder-7B-Instruct | Excellent pour le code Unity et le JSON |
 | Génération 3D | stabilityai/TripoSR | Le plus rapide et stable pour un usage local |
 
-### Bibliothèques MCP & Unity
+### Bibliothèques Unity & Ingestion
 
 | Technologie | Package/Référence | Description |
 |-------------|------------------|-------------|
-| Python SDK | `pip install mcp` | Officiel Anthropic |
-| Unity MCP | CoplayDev/unity-mcp ou ModelContextProtocol/csharp-sdk | Base du serveur C# |
+| Unity glTFast | `com.unity.cloud.gltfast` | Import GLB/GLTF dans Unity Editor |
 | Ingestion | `pip install unstructured[pdf,email]` | Parsing de documents |
 
 ### Datasets (Kaggle / Hugging Face)
@@ -141,10 +140,10 @@ Le planning est dense. La phase MCP est intégrée comme une **évolution majeur
                                                           ▼
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │   Unity Editor  │◀────│  Phase 4         │◀────│  US-4.4         │
-│   (MCP Server)  │     │  MCP Unity       │     │  Orchestration  │
+│  Unity Editor   │     │  Intégration     │     │  Orchestration  │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
 ```
 
 ---
 
-*Document généré à partir du Backlog PFE - Génération d'objets 3D et Serveur MCP Unity*
+*Document généré à partir du Backlog PFE - Génération d'Assets 3D et Intégration Unity Editor*

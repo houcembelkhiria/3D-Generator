@@ -183,7 +183,7 @@ Minist\`ere de l\'Enseignement Sup\'erieur et de la Recherche Scientifique
 {\color{tekupblue}\LARGE\bfseries
 Conception et Développement d'un\\[6pt]
 Microservice d'IA pour la Génération\\[6pt]
-Automatisée d'Assets 3D Unity via MCP
+Automatisée d'Assets 3D et Intégration Unity Editor
 }
 
 \vspace{0.3cm}
@@ -269,8 +269,7 @@ de ce parcours.
 développement d'un \textbf{microservice d'intelligence artificielle
 agentique} capable de transformer des données non structurées (PDF,
 emails, images) en objets 3D texturés, puis de les injecter automatiquement
-dans l'éditeur Unity via le protocole \textbf{MCP} (\textit{Model Context
-Protocol}). La méthodologie \textbf{CRISP-DM} structure le projet en six
+dans l'éditeur Unity via une \textbf{API REST} et un pont JSON (\texttt{SpawnBridge}). La méthodologie \textbf{CRISP-DM} structure le projet en six
 phases itératives. Le système repose sur un backend
 \textbf{FastAPI/Celery/Redis}, les pipelines de diffusion 3D
 \textbf{Hunyuan3D-2} (DiT + VAE 3D), un cache vectoriel \textbf{ChromaDB}
@@ -278,15 +277,14 @@ et un frontend \textbf{React~19/TypeScript}.
 
 \medskip\noindent
 \textbf{Mots-clés :} CRISP-DM, génération 3D, IA générative, Hunyuan3D,
-FastAPI, MCP, Unity, ChromaDB, microservice agentique.
+FastAPI, Unity, ChromaDB, microservice agentique, REST API.
 
 \vspace{0.6cm}\rule{\linewidth}{0.4pt}\vspace{0.4cm}
 
 \noindent\textbf{Abstract ---} This final-year project presents the design
 and development of an \textbf{agentic AI microservice} that transforms
 unstructured data (PDFs, emails, images) into textured 3D objects and
-automatically injects them into Unity Editor via the \textbf{Model Context
-Protocol (MCP)}. The \textbf{CRISP-DM} methodology structures the project
+automatically injects them into Unity Editor via a \textbf{REST API} and a shared JSON bridge (\texttt{SpawnBridge}). The \textbf{CRISP-DM} methodology structures the project
 into six iterative phases. The system relies on a
 \textbf{FastAPI/Celery/Redis} backend, \textbf{Hunyuan3D-2} diffusion
 pipelines, a \textbf{ChromaDB} vector cache and a \textbf{React~19}
@@ -294,14 +292,14 @@ frontend.
 
 \medskip\noindent
 \textbf{Keywords:} CRISP-DM, 3D generation, generative AI, Hunyuan3D,
-FastAPI, MCP, Unity, ChromaDB, agentic microservice.
+FastAPI, Unity, ChromaDB, agentic microservice, REST API.
 
 \vspace{0.6cm}\rule{\linewidth}{0.4pt}\vspace{0.4cm}
 
 \noindent\textbf{R\'esum\'e (arabe)} ---
 Ce projet porte sur la conception d\'un microservice d\'intelligence
 artificielle pour la g\'en\'eration automatique de mod\`eles 3D textur\'es
-et leur injection dans Unity Editor via le protocole MCP.
+et leur injection dans Unity Editor via une API REST et un pont JSON.
 
 \medskip\noindent
 \textbf{Mots-cl\'es (arabe) :} CRISP-DM, g\'en\'eration 3D, IA g\'en\'erative,
@@ -333,7 +331,6 @@ GPU       & Graphics Processing Unit \\
 IA        & Intelligence Artificielle \\
 JSON      & JavaScript Object Notation \\
 LLM       & Large Language Model \\
-MCP       & Model Context Protocol \\
 MPS       & Metal Performance Shaders (Apple Silicon) \\
 OBJ       & Wavefront Object (format de maillage 3D) \\
 PBR       & Physically Based Rendering \\
@@ -423,7 +420,7 @@ préparation des données, modélisation, évaluation et déploiement.
 \begin{itemize}[leftmargin=2.5cm,label=\textbullet]
   \item \textbf{Chapitre 1} — Compréhension du domaine : contexte, existant, backlog.
   \item \textbf{Chapitre 2} — Compréhension et préparation des données : sources, pipelines de nettoyage.
-  \item \textbf{Chapitre 3} — Modélisation et architecture : modèles IA, intégration MCP.
+  \item \textbf{Chapitre 3} — Modélisation et architecture : modèles IA, intégration Unity Editor.
   \item \textbf{Chapitre 4} — Réalisation : implémentation, interfaces, déploiement.
   \item \textbf{Chapitre 5} — Évaluation et validation : tests, métriques, revue CRISP-DM.
 \end{itemize}
@@ -512,7 +509,7 @@ d'assets 3D} à partir de données non structurées. Le projet
 \textbf{3D-Generator} développé constitue un microservice IA autonome
 capable de transformer des images, des prompts textuels ou des documents
 en modèles 3D texturés (format GLB/OBJ/STL), puis de les injecter
-directement dans Unity Editor via le protocole MCP --- sans aucune
+automatiquement dans Unity Editor via une API REST et un pont JSON --- sans aucune
 intervention manuelle de l'utilisateur.
 
 \section{Contexte général}
@@ -551,22 +548,19 @@ Zero123++            & Diffusion multi-vues& Bonne précision      & GPU haute g
 \end{tabularx}
 \end{table}
 
-\subsection{Le paradigme MCP appliqué à l'intégration Unity}
-Le Model Context Protocol (MCP), proposé par Anthropic en 2024, standardise
-la connexion entre assistants IA et outils locaux via un protocole client/serveur.
-Le projet s'inspire de ce paradigme : le backend Python joue le rôle de
-\textbf{client} (il émet les requêtes d'action via \texttt{POST /unity/spawn})
-et le script éditeur \texttt{SpawnBridge.cs} joue le rôle de \textbf{serveur
-d'outils} (il exécute l'action \texttt{spawn}). Le transport retenu est
-un dossier de fichiers JSON partagé --- plus léger qu'un WebSocket et sans
-dépendance réseau. Un protocole MCP bidirectionnel complet figure parmi les
-perspectives d'amélioration.
+\subsection{Architecture de l'intégration Unity Editor}
+L'intégration Unity repose sur une architecture client/serveur légère :
+le backend Python émet les requêtes d'action via \texttt{POST /api/v1/unity/spawn}
+et le script éditeur \texttt{SpawnBridge.cs} exécute l'action de spawn.
+Le transport retenu est un dossier de fichiers JSON partagés (\texttt{SpawnRequests/})
+--- plus simple qu'un WebSocket, sans dépendance réseau, et nativement
+supporté par Unity Editor.
 
 \subsection{Positionnement du projet}
 \begin{itemize}
   \item Pipeline \textbf{local} (sans API cloud payante).
   \item Trois modes : Image-to-3D, Text-to-3D, Multi-vues-to-3D.
-  \item Injection automatique dans Unity via MCP (aucun clic requis).
+  \item Injection automatique dans Unity via API REST (aucun clic requis).
   \item Cache vectoriel ChromaDB pour éviter les régénérations inutiles.
 \end{itemize}
 
@@ -620,12 +614,12 @@ US-3.4 & Stockage       & Gestion stockage et purge des fichiers & S4 \\
 \rowcolor{gray!8}
 US-4.1 & Unity Python   & Pont JSON Python/Unity (\texttt{routes\_unity.py}) & S5 \\
 US-4.2 & Unity C\#      & Script éditeur \texttt{SpawnBridge.cs} (polling JSON) & S5 \\
-US-4.3 & MCP Unity      & Outil Unity : SpawnBridge (GLB → scène Unity) & S5 \\
+US-4.3 & Unity REST     & Endpoint \texttt{POST /unity/spawn} + SpawnBridge (GLB → scène Unity) & S5 \\
 US-4.4 & Orchestration  & Résultat LangGraph accessible en galerie \textrightarrow{} spawn Unity manuel & S6 \\
 \rowcolor{gray!8}
 US-5.1 & UX Unity       & Lanceur URI \texttt{unity3dgen://} + installation automatique & S6 \\
 US-5.2 & Test E2E       & Test bout en bout : PDF vers 3D vers Unity & S6 \\
-US-5.3 & Doc            & Rédaction mémoire + documentation MCP & S7 \\
+US-5.3 & Doc            & Rédaction mémoire + documentation technique & S7 \\
 US-5.4 & Optimisation   & Nettoyage code + optimisation VRAM & S8 \\
 \bottomrule
 \end{longtable}
@@ -892,7 +886,7 @@ complète du système.
     \item Diagrammes UML (cas d'utilisation, séquence, classes)
     \item Modèles IA retenus et justifiés
     \item Pipeline de génération asynchrone
-    \item Intégration Unity via MCP (SpawnBridge, glTFast, URI)
+    \item Intégration Unity Editor (SpawnBridge, glTFast, URI)
     \item Cache vectoriel ChromaDB
     \item Pipeline agentique LangGraph
     \item Architecture frontend React
@@ -929,7 +923,7 @@ complète du système.
   \draw[arr](be)--node[above,lbl]{pub/poll}(rd);
   \draw[arr](wk)--node[right,lbl]{résultat}(rd);
   \draw[arr](wk)--node[below,lbl]{CLIP embed.}(db);
-  \draw[arr](be)--node[left,lbl]{SpawnRequest\\JSON (MCP)}(un);
+  \draw[arr](be)--node[left,lbl]{SpawnRequest\\JSON (REST)}(un);
 \end{tikzpicture}
 \caption{Architecture générale du système 3D-Generator}
 \label{fig:arch}
@@ -1165,7 +1159,7 @@ HunyuanDiT  & DiT bilingue Tencent    & 10 GB & FR, ZH \\
 \label{fig:flow}
 \end{figure}
 
-\section{Intégration Unity via MCP}
+\section{Intégration Unity Editor}
 \label{sec:unity-mcp}
 
 L'intégration Unity est la contribution la plus originale du projet :
@@ -1555,7 +1549,7 @@ complet en cas de redémarrage du worker.
 \addcontentsline{toc}{section}{Conclusion du chapitre 3}
 
 Ce chapitre a présenté l'architecture complète du système, les modèles IA
-retenus, le pipeline asynchrone et le mécanisme MCP pour Unity. Le chapitre
+retenus, le pipeline asynchrone et le mécanisme d'intégration Unity Editor. Le chapitre
 suivant décrit la réalisation concrète de ces composants.
 
 %% ================================================================
@@ -2119,7 +2113,7 @@ rigoureusement les six phases CRISP-DM. Les principaux apports sont :
     modes Image-to-3D, Text-to-3D et Multi-vues.
   \item Architecture asynchrone \textbf{FastAPI/Celery/Redis} garantissant
     la réactivité de l'interface pendant les longues générations.
-  \item Injection automatique dans Unity via le protocole \textbf{MCP} et
+  \item Injection automatique dans Unity via \textbf{API REST} et
     le script éditeur \texttt{SpawnBridge.cs}, sans manipulation manuelle.
   \item Cache vectoriel \textbf{ChromaDB}~\cite{chromadb} réduisant les temps de réponse
     à moins d'une seconde pour les requêtes redondantes.
@@ -2138,7 +2132,6 @@ rigoureusement les six phases CRISP-DM. Les principaux apports sont :
 \medskip\noindent\textbf{Perspectives :}
 \begin{enumerate}
   \item Support GPU NVIDIA/CUDA --- temps de génération visé $<$30 s.
-  \item Protocole MCP bidirectionnel complet (WebSocket).
   \item Fine-tuning sur corpus d'assets jeux vidéo (Objaverse-XL).
   \item Extension du pipeline LangGraph : auto-évaluation Trimesh du maillage
     (score convexité, détection floaters) avec boucle de régénération
@@ -2165,7 +2158,6 @@ rigoureusement les six phases CRISP-DM. Les principaux apports sont :
   \item ChromaDB --- \url{https://www.trychroma.com} --- consulté en 2025.
   \item glTFast --- \url{https://github.com/Unity-Technologies/com.unity.cloud.gltfast} --- consulté en 2025.
   \item model-viewer --- \url{https://modelviewer.dev} --- consulté en 2025.
-  \item Anthropic MCP --- \url{https://modelcontextprotocol.io} --- consulté en 2025.
   \item rembg --- \url{https://github.com/danielgatis/rembg} --- consulté en 2025.
   \item Celery --- \url{https://docs.celeryq.dev} --- consulté en 2025.
   \item LangGraph --- \url{https://langchain-ai.github.io/langgraph/} --- consulté en 2025.

@@ -4,8 +4,7 @@
   setup-v2 setup-backend-v2 setup-frontend-v2 \
   backend-v2 frontend-v2 dev-v2 \
   docker docker-down docker-v2 docker-v2-down \
-  clean clean-v2 \
-  mcp mcp-stdio dev-mcp
+  clean clean-v2
 
 # ──────────────────────────────────────────────
 #  v1  (original)  ports: Frontend 3000 · Backend 8000
@@ -35,7 +34,6 @@ frontend: Frontend/node_modules
 dev: Backend/venv Frontend/node_modules
 	@trap 'kill 0' EXIT; \
 	(cd Backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000) & \
-	(cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002) & \
 	(cd Frontend && npm run dev) & \
 	wait
 
@@ -97,22 +95,3 @@ clean:
 clean-v2:
 	rm -rf Backend-v2/venv Backend-v2/*.egg-info Backend-v2/build
 	rm -rf Frontend-v2/node_modules Frontend-v2/dist
-
-# ──────────────────────────────────────────────
-#  MCP server  port: 8002
-# ──────────────────────────────────────────────
-
-mcp: Backend/venv
-	@cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002
-
-mcp-stdio: Backend/venv
-	@cd Backend && source venv/bin/activate && python -m app.mcp_server
-
-# Run backend + MCP server together
-dev-mcp: Backend/venv Frontend/node_modules
-	@trap 'kill 0' EXIT; \
-	(cd Backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000) & \
-	(cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002) & \
-	(cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002) & \
-	(cd Frontend && npm run dev) & \
-	wait
