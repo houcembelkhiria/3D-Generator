@@ -1,15 +1,15 @@
-"""Unity launcher registration endpoints.
+"""Unity launcher registration endpoints + MCP event queue.
 
 Installs a tiny macOS .app bundle under ~/Applications that registers the
 `unity3dgen://` URL scheme with Launch Services. Once installed, any click on
-a `unity3dgen://spawn?...` URL routes to UnityLauncher.app, which writes a
-SpawnRequest JSON into UnityProject/Assets/SpawnRequests/ and launches Unity
-Editor if it is not already running. Unity's SpawnBridge editor script picks
-the request up and spawns the model.
+a `unity3dgen://spawn?...` URL routes to UnityLauncher.app.
 
-Only usable when the backend runs natively on macOS. In Docker the endpoint
-returns `supported: false` with a reason, since the container cannot modify
-the host's ~/Applications folder or Launch Services database.
+The spawn workflow now goes through the MCP EventBus:
+  POST /unity/spawn  →  EventBus.publish()  →  GET /unity/pending-events
+  →  Relay Agent  →  MCP tool call  →  Unity MCPSpawnTool.cs
+
+The register-launcher / launcher-status endpoints remain for the URI scheme
+installer (macOS only, host-native only).
 """
 from __future__ import annotations
 
@@ -232,43 +232,64 @@ class _SpawnBody(BaseModel):
 
 @router.post("/spawn")
 def spawn_model(body: _SpawnBody):
-    """Write a SpawnRequest JSON directly and launch Unity Editor if not running.
+    """Publish a spawn event to the EventBus.
 
-    This avoids the unity3dgen:// URL scheme entirely — the browser calls this
-    endpoint instead, so no tab navigation or custom URL scheme is needed.
+    The Relay Agent (unity-agent/agent.py) polls GET /unity/pending-events,
+    picks up the event, and calls the Unity MCP tool spawn_glb_from_url.
+    No file-system access required — works locally and on remote servers.
     """
-    _guard_host()
+    from app.events.factory import get_event_bus
 
-    import json
-    import time
-
-    req_dir = REPO_ROOT / "UnityProject" / "Assets" / "SpawnRequests"
-    req_dir.mkdir(parents=True, exist_ok=True)
-
-    stamp = int(time.time() * 1_000_000)
-    req_file = req_dir / f"spawn_{stamp}.json"
-    data = {
-        "id": body.id or f"model_{int(time.time() * 1000)}",
-        "url": body.url,
-        "scene": body.scene if body.scene in ("new", "existing") else "existing",
-        "name": body.name[:60],
-        "hasTexture": body.has_texture,
+    bus = get_event_bus()
+    event = {
+        "url":         body.url,
+        "scene":       body.scene if body.scene in ("new", "existing") else "existing",
+        "name":        body.name[:60],
+        "has_texture": body.has_texture,
     }
-    req_file.write_text(json.dumps(data))
+    event_id = bus.publish(event)
+    return {"spawned": True, "event_id": event_id}
 
-    # Launch Unity Editor if not already running.
-    try:
-        running = subprocess.run(
-            ["pgrep", "-xq", "Unity"], capture_output=True
-        ).returncode == 0
-        if not running:
-            subprocess.Popen(
-                ["open", "-a", "Unity", "--args", "-projectPath",
-                 str(REPO_ROOT / "UnityProject")],
-                start_new_session=True,
-            )
-    except Exception as exc:
-        logger.warning("Unity launch check failed: %s", exc)
 
-    return {"spawned": True}
+# ── MCP Event Queue endpoints ────────────────────────────────────────────────
+
+class _AckBody(BaseModel):
+    event_id: str
+
+
+def _check_agent_token(authorization: str = "") -> None:
+    """Validate Bearer token from Relay Agent."""
+    import os
+    from fastapi import HTTPException
+    expected = os.environ.get("UNITY_AGENT_TOKEN", "dev-token")
+    token = authorization.removeprefix("Bearer ").strip()
+    if token != expected:
+        raise HTTPException(401, "Invalid or missing UNITY_AGENT_TOKEN.")
+
+
+@router.get("/pending-events")
+def pending_events(authorization: str = ""):
+    """Return unacknowledged spawn events for the Relay Agent.
+
+    The Relay Agent polls this endpoint, picks up events, calls the Unity
+    MCP tool spawn_glb_from_url, then POSTs /ack for each processed event.
+
+    Header: Authorization: Bearer <UNITY_AGENT_TOKEN>
+    """
+    _check_agent_token(authorization)
+    from app.events.factory import get_event_bus
+    events = get_event_bus().consume(limit=20)
+    return {"events": events}
+
+
+@router.post("/ack")
+def ack_event(body: _AckBody, authorization: str = ""):
+    """Acknowledge a processed spawn event.
+
+    Header: Authorization: Bearer <UNITY_AGENT_TOKEN>
+    """
+    _check_agent_token(authorization)
+    from app.events.factory import get_event_bus
+    get_event_bus().ack(body.event_id)
+    return {"acked": True, "event_id": body.event_id}
 

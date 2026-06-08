@@ -1,7 +1,9 @@
 {
     "name": "ThreeDGenerator.Editor",
     "rootNamespace": "ThreeDGenerator.Editor",
-    "references": [],
+    "references": [
+        "com.coplay.mcp-for-unity"
+    ],
     "includePlatforms": [
         "Editor"
     ],

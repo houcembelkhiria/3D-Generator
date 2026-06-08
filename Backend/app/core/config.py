@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     
     # CORS Settings
     BACKEND_CORS_ORIGINS: list = ["http://localhost:3001", "http://localhost:8001"]
+
+    # Unity MCP Integration
+    # "sqlite" for local dev (no extra infra), "redis" for production
+    EVENT_BUS_TYPE: str = "sqlite"
+    # Shared secret between backend and unity-agent
+    UNITY_AGENT_TOKEN: str = "dev-token"
     
     class Config:
         env_file = ".env"

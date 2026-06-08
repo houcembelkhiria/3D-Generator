@@ -59,3 +59,7 @@ mesh_processor.cpp
 # Parallel dev trees (not part of main branch)
 Backend-v2/
 Frontend-v2/
+
+# Unity MCP Agent
+spawn_events.db
+unity-agent/.env
