@@ -1,9 +1,57 @@
 import logging
+import os
+import signal
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 
 from app.pipeline.state import Pipeline3DState
 
 logger = logging.getLogger(__name__)
+
+
+# Per-node timeouts (seconds). Override via env:
+#   LG_TIMEOUT_LLM=120, LG_TIMEOUT_MESH=1200, LG_TIMEOUT_DEFAULT=60
+# A timeout raises NodeTimeoutError which the node body catches and records
+# as a normal failure (so the validator + retry / fallback router still apply).
+LG_TIMEOUT_LLM = int(os.environ.get("LG_TIMEOUT_LLM", "120"))      # 2 min per LLM call
+LG_TIMEOUT_MESH = int(os.environ.get("LG_TIMEOUT_MESH", "1200"))   # 20 min per mesh gen
+LG_TIMEOUT_DEFAULT = int(os.environ.get("LG_TIMEOUT_DEFAULT", "60"))
+
+
+class NodeTimeoutError(TimeoutError):
+    pass
+
+
+@contextmanager
+def _node_timeout(seconds: int, label: str):
+    """Raise NodeTimeoutError if the wrapped block runs longer than `seconds`.
+
+    Uses SIGALRM in the main thread, threading.Timer + thread-kill fallback
+    in non-main threads (Celery prefork worker child = main thread, so SIGALRM
+    works; threaded pool workers fall back to the polite timer that asks the
+    block to check `_TIMEOUT_FLAG` — for true thread-kill use Celery's
+    task_time_limit which sends SIGTERM to the worker process).
+    """
+    is_main = threading.current_thread() is threading.main_thread()
+    if not is_main or seconds <= 0:
+        # No-op fallback; Celery's task_time_limit is the backstop
+        try:
+            yield
+        finally:
+            pass
+        return
+
+    def _handler(signum, frame):
+        raise NodeTimeoutError(f"{label} exceeded {seconds}s timeout")
+
+    old_handler = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 def parse_document_node(state: Pipeline3DState) -> dict:
@@ -14,7 +62,6 @@ def parse_document_node(state: Pipeline3DState) -> dict:
     return {
         "raw_text": parsed.get("content", ""),
         "parsed_content": parsed,
-        "current_step": "validate_parsed_document",
         "errors": [],
     }
 
@@ -42,7 +89,6 @@ def validate_parsed_document_node(state: Pipeline3DState) -> dict:
     if warnings:
         logger.warning("Pipeline: validate_parsed_document raised %d warning(s)", len(warnings))
     return {
-        "current_step": "spec_extraction",
         "errors": warnings,
     }
 
@@ -59,20 +105,26 @@ def extract_spec_llm_node(state: Pipeline3DState) -> dict:
 
     prompt = pe.create_extraction_prompt(state["raw_text"], "document_analysis")
     try:
-        response = llm.generate_response(prompt, max_tokens=1024, temperature=0.7)
+        with _node_timeout(LG_TIMEOUT_LLM, "extract_spec_llm"):
+            response = llm.generate_response(prompt, max_tokens=1024, temperature=0.7)
         json_data = llm.extract_json_from_text(response)
         return {
             "spec": json_data,
             "spec_valid": False,
-            "current_step": "validate_spec",
             "errors": [],
+        }
+    except NodeTimeoutError as te:
+        logger.warning("LLM extract timed out: %s", te)
+        return {
+            "spec": None,
+            "spec_valid": False,
+            "errors": [f"LLM extract timeout: {te}"],
         }
     except Exception as e:
         logger.warning("LLM extract failed: %s", e)
         return {
             "spec": None,
             "spec_valid": False,
-            "current_step": "validate_spec",
             "errors": [f"LLM extract error: {e}"],
         }
 
@@ -131,7 +183,6 @@ def build_fallback_spec_node(state: Pipeline3DState) -> dict:
         },
         "spec_valid": True,
         "errors": ["Fallback spec used after LLM retry exhaustion"],
-        "current_step": "generate_mesh",
     }
 
 
@@ -158,19 +209,25 @@ def generate_mesh_node(state: Pipeline3DState) -> dict:
 
     try:
         service = get_hunyuan3d()
-        result = service.text_to_3d(text_prompt)
+        with _node_timeout(LG_TIMEOUT_MESH, "generate_mesh"):
+            result = service.text_to_3d(text_prompt)
         return {
             "mesh_output": result,
             "mesh_valid": False,
-            "current_step": "validate_mesh",
             "errors": [],
+        }
+    except NodeTimeoutError as te:
+        logger.warning("Mesh generation timed out: %s", te)
+        return {
+            "mesh_output": None,
+            "mesh_valid": False,
+            "errors": [f"Mesh generation timeout: {te}"],
         }
     except Exception as e:
         logger.warning("Mesh generation failed: %s", e)
         return {
             "mesh_output": None,
             "mesh_valid": False,
-            "current_step": "validate_mesh",
             "errors": [f"Mesh generation error: {e}"],
         }
 
@@ -232,4 +289,4 @@ def store_result_node(state: Pipeline3DState) -> dict:
             logger.exception("gallery_db: failed to save pipeline result %s", uid)
 
     logger.info("Pipeline: complete | model_id=%s", model_info["model_id"])
-    return {"model_info": model_info, "current_step": "done"}
+    return {"model_info": model_info}

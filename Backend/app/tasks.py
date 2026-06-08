@@ -34,7 +34,6 @@ def run_pipeline(self, file_path: str, file_type: str) -> dict:
         "mesh_retry_count": 0,
         "model_info": None,
         "errors": [],
-        "current_step": "parse_document",
     }
 
     # Stream node-level events so Celery state reflects live progress.
@@ -48,7 +47,7 @@ def run_pipeline(self, file_path: str, file_type: str) -> dict:
         self.update_state(state="PROCESSING", meta={
             "status": f"Running {node_name}",
             "current_node": node_name,
-            "current_step": state_update.get("current_step", node_name),
+            # current_step removed — node_name above is the authoritative current node
             "recent_errors": recent_errors,
             "thread_id": thread_id,
         })
@@ -98,11 +97,11 @@ def resume_pipeline(self, thread_id: str) -> dict:
         raise ValueError(msg)
 
     logger.info("resume_pipeline: thread_id=%s resuming from %s",
-                thread_id, snapshot.get("current_step", "?"))
+                thread_id, snapshot.get("model_info", {}).get("model_id", "?"))
     self.update_state(state="PROCESSING", meta={
         "status": "Resuming from last checkpoint",
         "thread_id": thread_id,
-        "resumed_from": snapshot.get("current_step"),
+        "resumed_from": snapshot.get("model_info", {}).get("model_id"),
     })
 
     def _on_node_event(node_name: str, state_update: dict):
@@ -110,7 +109,7 @@ def resume_pipeline(self, thread_id: str) -> dict:
         self.update_state(state="PROCESSING", meta={
             "status": f"Running {node_name}",
             "current_node": node_name,
-            "current_step": state_update.get("current_step", node_name),
+            # current_step removed — node_name above is the authoritative current node
             "recent_errors": recent_errors,
             "thread_id": thread_id,
             "resumed": True,

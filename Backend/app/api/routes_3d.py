@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +19,7 @@ from pydantic import BaseModel, Field
 from app.services.hunyuan3d_service import get_hunyuan3d as _get_hunyuan3d
 from app.services.vector_store import VectorStore
 from app.services import gallery_db
+from app.worker import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -177,50 +177,87 @@ async def multiview_to_3d(body: MultiViewTo3DRequest):
 
 @router.get("/generation-status/{uid}", summary="Check async generation status")
 async def generation_status(uid: str):
-    if uid not in _pending_results:
-        raise HTTPException(status_code=404, detail="Job not found")
-    result = _pending_results[uid]
-    if result is None:
-        return {"status": "processing"}
-    return result
+    """Read the Celery task state for this generation job.
+
+    Returns one of:
+      - {"status": "queued"}   — task accepted but not started yet
+      - {"status": "processing", "stage": ..., "pct": ..., ...}
+      - {"status": "completed", "preview_url": ..., "download_url": ..., ...}
+      - {"status": "failed", "error": ...}
+      - {"status": "cancelled"}
+    """
+    res = celery_app.AsyncResult(uid)
+    state = res.state
+    info = res.info if isinstance(res.info, dict) else {}
+    if state == "PENDING":
+        # Celery PENDING is ambiguous (could be queued or unknown). We do not
+        # 404 here because the frontend may poll before the worker picks it up.
+        return {"status": "queued"}
+    if state == "PROCESSING":
+        return {"status": "processing", **info}
+    if state == "SUCCESS":
+        result_dict = res.result if isinstance(res.result, dict) else {}
+        return {"status": "completed", **result_dict}
+    if state == "FAILURE":
+        return {"status": "failed", "error": str(res.result) if res.result else info.get("error", "Task failed")}
+    if state == "REVOKED":
+        return {"status": "cancelled"}
+    return {"status": state.lower(), **info}
 
 
 @router.delete("/generation/{uid}", summary="Cancel a pending generation job")
 async def cancel_generation(uid: str):
-    if uid not in _pending_results:
-        raise HTTPException(status_code=404, detail="Job not found")
-    if _pending_results[uid] is None:
-        _pending_results[uid] = {"status": "cancelled"}
-    return {"cancelled": True, "status": _pending_results[uid].get("status")}
+    """Revoke the Celery task. If queued, removes it; if running, signals SIGTERM."""
+    result = celery_app.AsyncResult(uid)
+    if result.state == "PENDING":
+        # Could mean unknown task OR queued task (Celery PENDING is ambiguous).
+        # Revoke regardless; if it doesn't exist it's a no-op.
+        pass
+    try:
+        celery_app.control.revoke(uid, terminate=True, signal="SIGTERM")
+    except Exception:
+        logger.exception("revoke failed for %s", uid)
+    return {"cancelled": True, "status": "cancelled"}
 
 
 @router.websocket("/ws/generation/{uid}")
 async def ws_generation(websocket: WebSocket, uid: str):
+    """Stream Celery-task progress to the frontend.
+
+    Celery tasks call self.update_state(state="PROCESSING",
+    meta={"stage": ..., "pct": ..., ...}) — we read that via AsyncResult
+    every 0.5s and forward it as JSON. Same wire contract as the previous
+    in-memory _progress dict (stage, pct, optional result fields), so the
+    frontend WebSocket consumers do not need changes.
+    """
     await websocket.accept()
     try:
         while True:
-            prog = _progress.get(uid)
-            if prog is None:
-                # Check pending results for status
-                pending = _pending_results.get(uid)
-                if pending is None and uid not in _pending_results:
-                    prog = {"stage": "unknown", "pct": 0}
-                elif pending is None:
-                    prog = {"stage": "generating", "pct": 10}
-                elif isinstance(pending, dict) and pending.get("status") == "completed":
-                    prog = {"stage": "completed", "pct": 100, **pending}
-                elif isinstance(pending, dict) and pending.get("status") == "failed":
-                    prog = {"stage": "failed", "pct": 0, "error": pending.get("error", "")}
-                elif isinstance(pending, dict) and pending.get("status") == "cancelled":
-                    prog = {"stage": "cancelled", "pct": 0}
-                else:
-                    prog = {"stage": "generating", "pct": 10}
+            res = celery_app.AsyncResult(uid)
+            state = res.state
+            info = res.info if isinstance(res.info, dict) else {}
+            if state == "PENDING":
+                # PENDING in Celery = "unknown to backend"; treat as queued
+                prog = {"stage": "queued", "pct": 0}
+            elif state == "PROCESSING":
+                prog = info or {"stage": "generating", "pct": 10}
+            elif state == "SUCCESS":
+                # Final result; merge into the {stage:"completed", ...} shape
+                result_dict = res.result if isinstance(res.result, dict) else {}
+                prog = {"stage": "completed", "pct": 100, **result_dict}
+            elif state == "FAILURE":
+                err = str(res.result) if res.result else (info.get("error", "Task failed"))
+                prog = {"stage": "failed", "pct": 0, "error": err}
+            elif state == "REVOKED":
+                prog = {"stage": "cancelled", "pct": 0}
+            else:
+                prog = {"stage": state.lower(), "pct": 0}
             await websocket.send_json(prog)
             if prog.get("stage") in ("completed", "failed", "cancelled"):
                 break
             await asyncio.sleep(0.5)
     except Exception:
-        pass
+        logger.exception("ws_generation failed for %s", uid)
     finally:
         await websocket.close()
 
@@ -400,85 +437,28 @@ async def find_similar_models(body: ImageTo3DRequest):
 
 
 # --- Async submission endpoints ---
-
-# Stores results from background generation jobs: uid -> result dict | None (still running)
-# Capped at 500 entries to prevent unbounded growth on long-running servers.
-_pending_results: dict = {}
-_PENDING_MAX = 500
-
-# Real-time progress tracking: uid -> {"stage": str, "pct": int, ...}
-_progress: dict = {}
-
-
-
-def _persist_to_gallery(uid: str, result: dict, prompt: str = "", source: str = "image-to-3d", has_texture: bool = False) -> None:
-    """Compute file stats then write one row to gallery DB."""
-    glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
-    if glb_path.exists():
-        result.setdefault("file_size_mb", round(glb_path.stat().st_size / (1024 * 1024), 2))
-        if "face_count" not in result:
-            try:
-                import trimesh
-                mesh = trimesh.load(str(glb_path))
-                if hasattr(mesh, "faces"):
-                    result["face_count"] = len(mesh.faces)
-                elif hasattr(mesh, "geometry"):
-                    result["face_count"] = sum(
-                        g.faces.shape[0] for g in mesh.geometry.values() if hasattr(g, "faces")
-                    )
-            except Exception:
-                pass
-    try:
-        gallery_db.insert(
-            uid=uid,
-            prompt=prompt,
-            source=source,
-            preview_url=result.get("preview_url", ""),
-            download_url=result.get("download_url", ""),
-            generation_time=result.get("generation_time"),
-            face_count=result.get("face_count"),
-            file_size_mb=result.get("file_size_mb"),
-            has_texture=has_texture,
-        )
-    except Exception:
-        logger.exception("gallery_db: failed to save %s", uid)
-
-def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
-    _pending_results[uid] = None  # marks job as in-progress
-    _progress[uid] = {"stage": "started", "pct": 0}
-    try:
-        _progress[uid] = {"stage": "generating", "pct": 10}
-        result = fn(**kwargs)
-
-        # Don't overwrite a cancellation that arrived while we were running
-        if _pending_results.get(uid) != {"status": "cancelled"}:
-            _persist_to_gallery(result.get("uid", uid), result, prompt=prompt, source=source)
-            _pending_results[uid] = {"status": "completed", **result}
-            _progress[uid] = {"stage": "completed", "pct": 100, **result}
-
-    except Exception as exc:
-        logger.exception("Background generation %s failed", uid)
-        if _pending_results.get(uid) != {"status": "cancelled"}:
-            _pending_results[uid] = {"status": "failed", "error": str(exc)}
-            _progress[uid] = {"stage": "failed", "pct": 0, "error": str(exc)}
-    finally:
-        # Evict oldest entries when the dict grows too large
-        while len(_pending_results) > _PENDING_MAX:
-            _pending_results.pop(next(iter(_pending_results)))
+# (Previously kept _pending_results / _progress / _run_in_background /
+#  _persist_to_gallery here for the threading.Thread approach. All of that
+#  moved to app/tasks_3d.py when we migrated to Celery. Job state lives in
+#  the Celery result backend; the WebSocket and /generation-status endpoints
+#  above read it via celery_app.AsyncResult.)
 
 
 @router.post("/image-to-3d/async", summary="Submit async image-to-3d job")
 async def image_to_3d_async(body: ImageTo3DRequest):
-    svc = get_hunyuan3d()
     uid = str(uuid.uuid4())
-
-    def run():
-        return svc.image_to_3d(image_b64=body.image, seed=body.seed, steps=body.num_inference_steps,
-                        guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
-                        num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
-                        output_type=body.type)
-
-    threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "image-to-3d"}, daemon=True).start()
+    celery_app.send_task(
+        "app.tasks_3d.image_to_3d_task",
+        kwargs={
+            "image_b64": body.image, "seed": body.seed,
+            "num_inference_steps": body.num_inference_steps,
+            "guidance_scale": body.guidance_scale,
+            "octree_resolution": body.octree_resolution,
+            "num_chunks": body.num_chunks, "texture": body.texture,
+            "face_count": body.face_count, "output_type": body.type,
+        },
+        task_id=uid,
+    )
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -488,14 +468,19 @@ async def text_to_3d_async(body: TextTo3DRequest):
     if not svc.has_t2i:
         raise HTTPException(status_code=503, detail="Text-to-3D is disabled.")
     uid = str(uuid.uuid4())
-
-    def run():
-        return svc.text_to_3d(text=body.text, seed=body.seed, steps=body.num_inference_steps,
-                       guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
-                       num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
-                       output_type=body.type, t2i_model=body.t2i_model)
-
-    threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "text-to-3d", "prompt": body.text}, daemon=True).start()
+    celery_app.send_task(
+        "app.tasks_3d.text_to_3d_task",
+        kwargs={
+            "text": body.text, "seed": body.seed,
+            "num_inference_steps": body.num_inference_steps,
+            "guidance_scale": body.guidance_scale,
+            "octree_resolution": body.octree_resolution,
+            "num_chunks": body.num_chunks, "texture": body.texture,
+            "face_count": body.face_count, "output_type": body.type,
+            "t2i_model": body.t2i_model,
+        },
+        task_id=uid,
+    )
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -509,14 +494,18 @@ async def multiview_to_3d_async(body: MultiViewTo3DRequest):
     if body.back: views["back"] = body.back
     if body.left: views["left"] = body.left
     if body.right: views["right"] = body.right
-
-    def run():
-        return svc.multiview_to_3d(views=views, seed=body.seed, steps=body.num_inference_steps,
-                            guidance_scale=body.guidance_scale, octree_resolution=body.octree_resolution,
-                            num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
-                            output_type=body.type)
-
-    threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "multiview-to-3d"}, daemon=True).start()
+    celery_app.send_task(
+        "app.tasks_3d.multiview_to_3d_task",
+        kwargs={
+            "views": views, "seed": body.seed,
+            "num_inference_steps": body.num_inference_steps,
+            "guidance_scale": body.guidance_scale,
+            "octree_resolution": body.octree_resolution,
+            "num_chunks": body.num_chunks, "texture": body.texture,
+            "face_count": body.face_count, "output_type": body.type,
+        },
+        task_id=uid,
+    )
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -534,13 +523,14 @@ async def retexture_async(uid: str, body: RetextureRequest):
     if not svc.has_t2i:
         raise HTTPException(status_code=503, detail="Text-to-image pipeline required for retexture")
     new_uid = str(uuid.uuid4())
-    def run():
-        return svc.retexture(uid=uid, prompt=body.prompt, seed=body.seed, out_type=body.type)
-    threading.Thread(
-        target=_run_in_background, args=(run, new_uid),
-        kwargs={"source": "retexture", "prompt": body.prompt},
-        daemon=True,
-    ).start()
+    celery_app.send_task(
+        "app.tasks_3d.retexture_task",
+        kwargs={
+            "source_uid": uid, "prompt": body.prompt,
+            "seed": body.seed, "output_type": body.type,
+        },
+        task_id=new_uid,
+    )
     return JSONResponse({"uid": new_uid, "status": "processing"}, status_code=202)
 
 

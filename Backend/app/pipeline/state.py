@@ -27,4 +27,3 @@ class Pipeline3DState(TypedDict):
     # Accumulated errors across all nodes
     errors: Annotated[List[str], operator.add]
 
-    current_step: str

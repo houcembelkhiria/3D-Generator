@@ -5,7 +5,7 @@ celery_app = Celery(
     "3d_generator_worker",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.tasks"]
+    include=["app.tasks", "app.tasks_3d"],
 )
 
 # Celery configuration
@@ -33,9 +33,13 @@ celery_app.conf.update(
     result_extended=True,                 # include task name/args in result meta
     # Queue routing
     task_routes={
-        "app.tasks.process_document": {"queue": "document_processing"},
-        "app.tasks.generate_3d_model": {"queue": "3d_generation"},
-        "app.tasks.run_pipeline":      {"queue": "3d_generation"},
-        "app.tasks.resume_pipeline":   {"queue": "3d_generation"},
+        # Document-to-3D LangGraph pipeline
+        "app.tasks.run_pipeline":              {"queue": "3d_generation"},
+        "app.tasks.resume_pipeline":           {"queue": "3d_generation"},
+        # Direct 3D generation tasks (was running in FastAPI via threading.Thread)
+        "app.tasks_3d.image_to_3d_task":       {"queue": "3d_generation"},
+        "app.tasks_3d.text_to_3d_task":        {"queue": "3d_generation"},
+        "app.tasks_3d.multiview_to_3d_task":   {"queue": "3d_generation"},
+        "app.tasks_3d.retexture_task":         {"queue": "3d_generation"},
     },
 )
