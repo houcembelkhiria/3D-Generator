@@ -110,12 +110,22 @@ class Hunyuan3DService:
         empty_cache()
 
         # torch.compile: CUDA and MPS (tracing overhead on first call, faster on subsequent)
-        if settings.device in ("cuda", "mps"):
+        if settings.device == "cuda":
             try:
                 self.i23d_pipeline.model = torch.compile(self.i23d_pipeline.model, mode="reduce-overhead")
                 logger.info("Applied torch.compile to DiT model (%s)", settings.device)
             except Exception as _exc:
-                logger.warning("torch.compile failed: %s", _exc)
+                logger.warning("torch.compile failed for DiT: %s", _exc)
+            try:
+                self.i23d_pipeline.vae = torch.compile(self.i23d_pipeline.vae, mode="reduce-overhead")
+                logger.info("Applied torch.compile to shape-gen VAE")
+            except Exception as _exc:
+                logger.warning("torch.compile failed for shape-gen VAE: %s", _exc)
+            try:
+                self.i23d_pipeline.conditioner = torch.compile(self.i23d_pipeline.conditioner, mode="reduce-overhead")
+                logger.info("Applied torch.compile to shape-gen conditioner")
+            except Exception as _exc:
+                logger.warning("torch.compile failed for shape-gen conditioner: %s", _exc)
 
         # Quantize DiT to int8 on CPU — 2-3x speedup over float32 (quantized models must stay on CPU)
         if settings.enable_quantization and settings.device == "cpu":
@@ -131,7 +141,7 @@ class Hunyuan3DService:
             self.vector_store = vector_store
         else:
             try:
-                cache_threshold = float(os.environ.get("HY3D_CACHE_THRESHOLD", "0.85"))
+                cache_threshold = float(os.environ.get("HY3D_CACHE_THRESHOLD", "0.98"))
                 self.vector_store = VectorStore(
                     persist_dir=str(Path(settings.cache_path).parent / "vector_store"),
                     similarity_threshold=cache_threshold,
@@ -164,6 +174,35 @@ class Hunyuan3DService:
         if self.settings.enable_flashvdm:
             mc_algo = self._dm.mc_algo
             self.mv_pipeline.enable_flashvdm(mc_algo=mc_algo)
+        # VAE slicing — same as i23d_pipeline
+        if hasattr(self.mv_pipeline, 'vae') and hasattr(self.mv_pipeline.vae, 'use_slicing'):
+            self.mv_pipeline.vae.use_slicing = True
+            logger.info("Enabled VAE slicing for mv pipeline")
+        # torch.compile on GPU
+        if self.settings.device == "cuda":
+            try:
+                self.mv_pipeline.model = torch.compile(self.mv_pipeline.model, mode="reduce-overhead")
+                logger.info("Applied torch.compile to mv DiT model (%s)", self.settings.device)
+            except Exception as exc:
+                logger.warning("torch.compile failed for mv DiT: %s", exc)
+            try:
+                self.mv_pipeline.vae = torch.compile(self.mv_pipeline.vae, mode="reduce-overhead")
+                logger.info("Applied torch.compile to mv VAE")
+            except Exception as exc:
+                logger.warning("torch.compile failed for mv VAE: %s", exc)
+            try:
+                self.mv_pipeline.conditioner = torch.compile(self.mv_pipeline.conditioner, mode="reduce-overhead")
+                logger.info("Applied torch.compile to mv conditioner")
+            except Exception as exc:
+                logger.warning("torch.compile failed for mv conditioner: %s", exc)
+        # int8 quantization on CPU — same as i23d_pipeline
+        if self.settings.enable_quantization and self.device == "cpu":
+            try:
+                self.mv_pipeline.model = self._quantize_model(
+                    self.mv_pipeline.model, "mv-DiT", target_device="cpu"
+                )
+            except Exception as exc:
+                logger.warning("Could not quantize mv-DiT: %s", exc)
         self._mv_loaded = True
         logger.info("Multi-view pipeline ready")
 
@@ -175,19 +214,49 @@ class Hunyuan3DService:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
             logger.info("Lazy-loading texture pipeline...")
             self.texgen_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
-                self.settings.tex_model_path, device="cpu"
+                self.settings.tex_model_path, device=self.device
             )
             self.texgen_pipeline.models["multiview_model"].pipeline.vae.use_slicing = True
-            # Quantize if enabled and running on CPU
-            if self.settings.enable_quantization and self.device == "cpu":
-                try:
-                    mv_model = self.texgen_pipeline.models.get("multiview_model")
-                    if mv_model and hasattr(mv_model, "pipeline"):
-                        pipe = mv_model.pipeline
-                        if hasattr(pipe, "unet"):
-                            pipe.unet = self._quantize_model(pipe.unet, "texgen UNet", target_device="cpu")
-                except Exception as exc:
-                    logger.warning("Could not quantize texgen: %s", exc)
+            # Attention slicing + VAE slicing for both sub-pipelines (CPU efficiency)
+            try:
+                pass  # attention_slicing removed — breaks MPS with 52GB OOM
+            except Exception as exc:
+                logger.warning("Could not enable attention slicing for multiview: %s", exc)
+            try:
+                _delight = self.texgen_pipeline.models.get("delight_model")
+                if _delight and hasattr(_delight, "pipeline"):
+                    pass  # attention_slicing removed — breaks MPS
+                    if hasattr(_delight.pipeline, "vae"):
+                        _delight.pipeline.vae.enable_slicing()
+            except Exception as exc:
+                logger.warning("Could not enable attention slicing for delight: %s", exc)
+            # xFormers memory-efficient attention (GPU only, optional dependency)
+            try:
+                self.texgen_pipeline.models["multiview_model"].pipeline.enable_xformers_memory_efficient_attention()
+                logger.info("Enabled xFormers attention for multiview model")
+            except Exception:
+                pass  # xFormers not installed — SDPA fallback is fine
+            try:
+                _dl = self.texgen_pipeline.models.get("delight_model")
+                if _dl and hasattr(_dl, "pipeline"):
+                    _dl.pipeline.enable_xformers_memory_efficient_attention()
+                    logger.info("Enabled xFormers attention for delight model")
+            except Exception:
+                pass
+            # channels_last on VAE components too (conv-heavy, benefits from NHWC)
+            try:
+                mv_vae = self.texgen_pipeline.models["multiview_model"].pipeline.vae
+                mv_vae.to(memory_format=torch.channels_last)
+            except Exception:
+                pass
+            try:
+                _dl2 = self.texgen_pipeline.models.get("delight_model")
+                if _dl2 and hasattr(_dl2, "pipeline") and hasattr(_dl2.pipeline, "vae"):
+                    _dl2.pipeline.vae.to(memory_format=torch.channels_last)
+            except Exception:
+                pass
+            # Texgen models (multiview UNet, delight UNet) must NOT be int8 quantized —
+            # diffusion models require full precision for correct color output
             self._texgen_loaded = True
             logger.info("Texture pipeline ready")
         except Exception as exc:
@@ -227,6 +296,20 @@ class Hunyuan3DService:
                             setattr(parent, parts[-1], mod)
                 except Exception as exc:
                     logger.warning("Could not quantize t2i: %s", exc)
+            # Attention slicing + VAE slicing for t2i
+            try:
+                t2i_pipe = self.t2i_pipeline.pipe if hasattr(self.t2i_pipeline, 'pipe') else None
+                if t2i_pipe is not None:
+                    if hasattr(t2i_pipe, 'enable_attention_slicing'):
+                        t2i_pipe.enable_attention_slicing(1)
+                        logger.info("Enabled attention slicing for t2i pipeline")
+                    if hasattr(t2i_pipe, 'vae') and t2i_pipe.vae is not None:
+                        if hasattr(t2i_pipe.vae, 'enable_slicing'):
+                            t2i_pipe.vae.enable_slicing()
+                        if hasattr(t2i_pipe.vae, 'enable_tiling'):
+                            t2i_pipe.vae.enable_tiling()
+            except Exception as exc:
+                logger.warning("Could not enable slicing for t2i: %s", exc)
             self._t2i_loaded = True
             logger.info("Text-to-image pipeline ready")
         except Exception as exc:
@@ -329,13 +412,16 @@ class Hunyuan3DService:
     def _offload_to_cpu(self, *pipelines: str) -> None:
         if not self._dm.is_gpu:
             return
+        import time as _t
         for name in pipelines:
             pipe = getattr(self, name, None)
             if pipe is not None:
+                _ts = _t.time()
                 if hasattr(pipe, "to"):
                     pipe.to("cpu")
                 elif hasattr(pipe, "pipe"):
                     pipe.pipe.to("cpu")
+                logger.info("_offload_to_cpu(%s) took %.1f s", name, _t.time() - _ts)
         gc.collect()
         empty_cache()
 
@@ -466,6 +552,9 @@ class Hunyuan3DService:
         face_count: int = 20000,
         output_type: str = "glb",
     ) -> Dict:
+        # Cap octree_resolution to 256 — 3-level FlashVDM (>256) has indexing bug
+        octree_resolution = min(octree_resolution, 192)
+
         uid = uuid.uuid4()
         out_type = output_type if output_type in SUPPORTED_FORMATS else "glb"
 
@@ -498,7 +587,7 @@ class Hunyuan3DService:
                     boost = min(_attempt - 1, 4)
                     steps = max(2, steps - boost)                    # 5 → 4 → 3 → 2 → 2 (faster)
                     seed = seed + _attempt - 1                       # vary seed
-                    octree_resolution = min(384, octree_resolution + (boost * 32))  # 128 → 160 → 192 (better mesh)
+                    octree_resolution = min(192, octree_resolution + (boost * 32))  # 128 → 160 → 192 → 256 max (3-level crash at >256)
                     
                     logger.info(
                         "Attempt #%d (sim=%.4f) — steps=%d (reduced), octree=%d (boosted), seed=%d",
@@ -509,14 +598,14 @@ class Hunyuan3DService:
 
         # --- Blend with previous attempt's input for refinement ---
         if _embedding is not None and _attempt > 1:
-            emb_key = hashlib.sha256(str(_embedding[:8]).encode()).hexdigest()[:12]
+            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
             prev_input = self._input_history.get(emb_key)
             if prev_input is not None:
                 clean_image = self._blend_with_previous(clean_image, prev_input, _attempt)
         
         # Store current clean input for next attempt's blending
         if _embedding is not None:
-            emb_key = hashlib.sha256(str(_embedding[:8]).encode()).hexdigest()[:12]
+            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
             self._lru_put(self._input_history, emb_key, clean_image.copy(), MAX_INPUT_HISTORY)
 
         generator = torch.Generator(self.device).manual_seed(seed)
@@ -540,12 +629,14 @@ class Hunyuan3DService:
         if texture and self.has_texgen:
             self._ensure_texgen_loaded()
             mesh = self.face_reducer(mesh, max_facenum=face_count)
-            self._offload_to_cpu("i23d_pipeline")
+            if self._dm.is_gpu:
+                self._offload_to_cpu("i23d_pipeline")
             t0 = time.time()
             with torch.inference_mode():
                 mesh = self.texgen_pipeline(mesh, clean_image)
             logger.info("Texture gen took %.1f s", time.time() - t0)
-            self._move_to_device("i23d_pipeline")
+            if self._dm.is_gpu:
+                self._move_to_device("i23d_pipeline")
             include_normals = True
         del clean_image, image
 
@@ -577,6 +668,8 @@ class Hunyuan3DService:
         face_count: int = 20000,
         output_type: str = "glb",
     ) -> Dict:
+        # Cap octree_resolution to 256 — 3-level FlashVDM (>256) has indexing bug
+        octree_resolution = min(octree_resolution, 192)
         self._ensure_t2i_loaded()
         if not self.has_t2i or self.t2i_pipeline is None:
             raise RuntimeError("Text-to-3D is disabled. Enable with HY3D_ENABLE_T23D=true.")
@@ -724,6 +817,8 @@ class Hunyuan3DService:
         face_count: int = 20000,
         output_type: str = "glb",
     ) -> Dict:
+        # Cap octree_resolution to 256 — 3-level FlashVDM (>256) has indexing bug
+        octree_resolution = min(octree_resolution, 192)
         self._ensure_mv_loaded()
         if not self.has_mv or self.mv_pipeline is None:
             raise RuntimeError("Multi-view mode is disabled. Enable with HY3D_ENABLE_MV=true.")
@@ -762,19 +857,19 @@ class Hunyuan3DService:
                     boost = min(_attempt - 1, 4)
                     steps = max(2, steps - boost)
                     seed = seed + _attempt - 1
-                    octree_resolution = min(384, octree_resolution + (boost * 32))
+                    octree_resolution = min(192, octree_resolution + (boost * 32))
                     logger.info("MV Attempt #%d (sim=%.4f) — steps=%d (reduced), octree=%d (boosted)", _attempt, similarity, steps, octree_resolution)
                 else:
                     logger.info("MV first generation — attempt #1")
 
         # --- Blend front view with previous attempt ---
         if _embedding is not None and _attempt > 1:
-            emb_key = hashlib.sha256(str(_embedding[:8]).encode()).hexdigest()[:12]
+            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
             prev_front = self._input_history.get(emb_key)
             if prev_front is not None and "front" in image_dict:
                 image_dict["front"] = self._blend_with_previous(image_dict["front"], prev_front, _attempt)
         if _embedding is not None and "front" in image_dict:
-            emb_key = hashlib.sha256(str(_embedding[:8]).encode()).hexdigest()[:12]
+            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
             self._lru_put(self._input_history, emb_key, image_dict["front"].copy(), MAX_INPUT_HISTORY)
 
         # Offload other pipelines for MV

@@ -45,3 +45,7 @@ class Hunyuan3DSettings:
     mc_algo: str = "mc"
     profile: int = 3
     verbose: int = 1
+
+    # TexGen inference step counts (lower = faster, higher = better quality)
+    delight_steps: int = field(default_factory=lambda: int(os.environ.get("HY3D_DELIGHT_STEPS", "8")))
+    multiview_steps: int = field(default_factory=lambda: int(os.environ.get("HY3D_MULTIVIEW_STEPS", "6")))

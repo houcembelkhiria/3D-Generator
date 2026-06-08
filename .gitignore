@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+Backend/venv/
+.venv/
+venv/
+
+# Runtime artifacts
+Backend/generated/
+
+# Build logs
+build_log*.txt
+
+# macOS
+.DS_Store
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vincent/
+
+# Environment
+.env.local
+*.local
+.claude/
+# Node
+node_modules/
+
+# Compiled C extensions (rebuilt by setup.sh)
+*.cpython-*-darwin.so
+mesh_processor.cpp

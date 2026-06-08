@@ -95,6 +95,20 @@ class DeviceManager:
             torch.backends.quantized.engine = self.quantization_engine
         except Exception:
             pass
+        if self.device.type == "cuda":
+            # TF32: ~3x faster conv/matmul on Ampere+ with <0.1% accuracy loss
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            # Auto-tune conv algorithms for this hardware/input-size combination
+            torch.backends.cudnn.benchmark = True
+        if self.device.type == "cpu":
+            # Pin threads to physical cores (avoid hyper-thread contention)
+            import os as _os, multiprocessing as _mp
+            phys = max(1, _mp.cpu_count() // 2)
+            torch.set_num_threads(phys)
+            torch.set_num_interop_threads(max(1, min(4, phys // 2)))
+            _os.environ.setdefault("OMP_NUM_THREADS", str(phys))
+            _os.environ.setdefault("MKL_NUM_THREADS", str(phys))
 
 
 def _cpu_supports_avx512() -> bool:

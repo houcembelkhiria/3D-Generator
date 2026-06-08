@@ -67,54 +67,47 @@ def scatter_add_nd_with_count(input, count, indices, values, weights=None):
 def linear_grid_put_2d(H, W, coords, values, return_count=False):
     # coords: [N, 2], float in [0, 1]
     # values: [N, C]
+    #
+    # Uses numpy np.add.at instead of torch.scatter_add_ because the latter
+    # produces corrupted (rainbow) output on Apple Silicon MPS.
 
     C = values.shape[-1]
+    device = values.device
 
-    indices = coords * torch.tensor(
-        [H - 1, W - 1], dtype=torch.float32, device=coords.device
-    )
-    indices_00 = indices.floor().long()  # [N, 2]
-    indices_00[:, 0].clamp_(0, H - 2)
-    indices_00[:, 1].clamp_(0, W - 2)
-    indices_01 = indices_00 + torch.tensor(
-        [0, 1], dtype=torch.long, device=indices.device
-    )
-    indices_10 = indices_00 + torch.tensor(
-        [1, 0], dtype=torch.long, device=indices.device
-    )
-    indices_11 = indices_00 + torch.tensor(
-        [1, 1], dtype=torch.long, device=indices.device
-    )
+    coords_np = coords.detach().cpu().float().numpy()
+    values_np = values.detach().cpu().float().numpy()
 
-    h = indices[..., 0] - indices_00[..., 0].float()
-    w = indices[..., 1] - indices_00[..., 1].float()
-    w_00 = (1 - h) * (1 - w)
-    w_01 = (1 - h) * w
-    w_10 = h * (1 - w)
-    w_11 = h * w
+    indices = coords_np * np.array([H - 1, W - 1], dtype=np.float32)
+    indices_00 = np.floor(indices).astype(np.int64)
+    indices_00[:, 0] = np.clip(indices_00[:, 0], 0, H - 2)
+    indices_00[:, 1] = np.clip(indices_00[:, 1], 0, W - 2)
+    indices_01 = indices_00 + np.array([[0, 1]])
+    indices_10 = indices_00 + np.array([[1, 0]])
+    indices_11 = indices_00 + np.array([[1, 1]])
 
-    result = torch.zeros(H, W, C, device=values.device,
-                         dtype=values.dtype)  # [H, W, C]
-    count = torch.zeros(H, W, 1, device=values.device,
-                        dtype=values.dtype)  # [H, W, 1]
-    weights = torch.ones_like(values[..., :1])  # [N, 1]
+    h = indices[:, 0] - indices_00[:, 0].astype(np.float32)
+    w = indices[:, 1] - indices_00[:, 1].astype(np.float32)
+    w_00 = ((1 - h) * (1 - w))[:, np.newaxis]
+    w_01 = ((1 - h) * w)[:, np.newaxis]
+    w_10 = (h * (1 - w))[:, np.newaxis]
+    w_11 = (h * w)[:, np.newaxis]
 
-    result, count = scatter_add_nd_with_count(
-        result, count, indices_00, values * w_00.unsqueeze(1), weights * w_00.unsqueeze(1))
-    result, count = scatter_add_nd_with_count(
-        result, count, indices_01, values * w_01.unsqueeze(1), weights * w_01.unsqueeze(1))
-    result, count = scatter_add_nd_with_count(
-        result, count, indices_10, values * w_10.unsqueeze(1), weights * w_10.unsqueeze(1))
-    result, count = scatter_add_nd_with_count(
-        result, count, indices_11, values * w_11.unsqueeze(1), weights * w_11.unsqueeze(1))
+    result = np.zeros((H, W, C), dtype=np.float32)
+    count = np.zeros((H, W, 1), dtype=np.float32)
+
+    for idx, wt in [(indices_00, w_00), (indices_01, w_01),
+                     (indices_10, w_10), (indices_11, w_11)]:
+        np.add.at(result, (idx[:, 0], idx[:, 1]), values_np * wt)
+        np.add.at(count, (idx[:, 0], idx[:, 1]), wt)
 
     if return_count:
-        return result, count
+        return (torch.from_numpy(result).to(device),
+                torch.from_numpy(count).to(device))
 
-    mask = (count.squeeze(-1) > 0)
-    result[mask] = result[mask] / count[mask].repeat(1, C)
+    mask = count.squeeze(-1) > 0
+    result[mask] = result[mask] / np.repeat(count[mask], C, axis=1)
 
-    return result
+    return torch.from_numpy(result).to(device)
 
 
 class MeshRender():
@@ -764,13 +757,18 @@ class MeshRender():
 
         if method == 'linear':
             proj_mask = (visible_mask != 0).view(-1)
-            uv = uv.squeeze(0).contiguous().view(-1, 2)[proj_mask]
-            image = image.squeeze(0).contiguous().view(-1, channel)[proj_mask]
-            cos_image = cos_image.contiguous().view(-1, 1)[proj_mask]
-            sketch_image = sketch_image.contiguous().view(-1, 1)[proj_mask]
+            # .clone() forces fresh tensor memory — fixes corrupted metadata from custom rasterizer kernel
+            uv = uv.squeeze(0).contiguous().view(-1, 2)[proj_mask].clone()
+            image = image.squeeze(0).contiguous().view(-1, channel)[proj_mask].clone()
+            cos_image = cos_image.contiguous().view(-1, 1)[proj_mask].clone()
+            sketch_image = sketch_image.contiguous().view(-1, 1)[proj_mask].clone()
+
+            import sys as _sys
+            _sys.stderr.write(f"\n[BAKE DEBUG] uv: [{uv.min():.3f},{uv.max():.3f}] img: [{image.min():.3f},{image.max():.3f}] vis={proj_mask.sum().item()}/{proj_mask.numel()}\n")
+            _sys.stderr.flush()
 
             texture = linear_grid_put_2d(
-                self.texture_size[1], self.texture_size[0], uv[..., [1, 0]], image)
+                self.texture_size[1], self.texture_size[0], uv[..., [1, 0]].clone(), image.clone())
             cos_map = linear_grid_put_2d(
                 self.texture_size[1], self.texture_size[0], uv[..., [1, 0]], cos_image)
             boundary_map = linear_grid_put_2d(

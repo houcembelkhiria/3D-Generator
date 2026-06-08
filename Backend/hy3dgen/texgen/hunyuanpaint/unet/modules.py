@@ -362,7 +362,7 @@ class UNet2p5DConditionModel(torch.nn.Module):
 
         # Ensure consistent dtype
         dtype = next(self.parameters()).dtype
-        if self.device.type in ('cpu', 'mps'):
+        if self.device.type == 'cpu':
             dtype = torch.float32
             
         encoder_hidden_states_gen = encoder_hidden_states.unsqueeze(1).repeat(1, N_gen, 1, 1).to(dtype)

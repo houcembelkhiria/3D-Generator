@@ -77,7 +77,6 @@ class HunyuanPaintPipeline(StableDiffusionPipeline):
             safety_checker=safety_checker,
             feature_extractor=torch.compile(feature_extractor) if use_torch_compile else feature_extractor,
         )
-        self.vae.enable_tiling()
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 

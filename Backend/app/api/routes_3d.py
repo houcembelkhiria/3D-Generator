@@ -43,7 +43,7 @@ class ImageTo3DRequest(BaseModel):
     seed: int = Field(1234, ge=0)
     num_inference_steps: int = Field(5, ge=1, le=100)
     guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
-    octree_resolution: int = Field(128, ge=16, le=512)
+    octree_resolution: int = Field(128, ge=16, le=192)
     num_chunks: int = Field(8000, ge=100)
     texture: bool = False
     face_count: int = Field(20000, ge=100)
@@ -55,7 +55,7 @@ class TextTo3DRequest(BaseModel):
     seed: int = Field(1234, ge=0)
     num_inference_steps: int = Field(5, ge=1, le=100)
     guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
-    octree_resolution: int = Field(128, ge=16, le=512)
+    octree_resolution: int = Field(128, ge=16, le=192)
     num_chunks: int = Field(8000, ge=100)
     texture: bool = False
     face_count: int = Field(20000, ge=100)
@@ -70,7 +70,7 @@ class MultiViewTo3DRequest(BaseModel):
     seed: int = Field(1234, ge=0)
     num_inference_steps: int = Field(5, ge=1, le=100)
     guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
-    octree_resolution: int = Field(128, ge=16, le=512)
+    octree_resolution: int = Field(128, ge=16, le=192)
     num_chunks: int = Field(8000, ge=100)
     texture: bool = False
     face_count: int = Field(20000, ge=100)

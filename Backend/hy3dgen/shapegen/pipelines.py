@@ -576,7 +576,7 @@ class Hunyuan3DDiTPipeline:
         dual_guidance: bool = True,
         generator=None,
         box_v=1.01,
-        octree_resolution=384,
+        octree_resolution=192,
         mc_level=-1 / 512,
         num_chunks=8000,
         mc_algo=None,
@@ -670,7 +670,7 @@ class Hunyuan3DDiTPipeline:
         box_v=1.01,
         mc_level=0.0,
         num_chunks=20000,
-        octree_resolution=256,
+        octree_resolution=192,
         mc_algo='mc',
         enable_pbar=True
     ):
@@ -708,7 +708,7 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
         guidance_scale: float = 5.0,
         generator=None,
         box_v=1.01,
-        octree_resolution=384,
+        octree_resolution=192,
         mc_level=0.0,
         mc_algo=None,
         num_chunks=8000,

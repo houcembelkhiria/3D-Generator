@@ -131,6 +131,23 @@ export default function App() {
               generationTime: m.generationTime,
             }));
             setGeneratedModels(cached);
+            return;
+          }
+        }
+        // Fallback: load from disk if cache is empty
+        const diskRes = await fetch(`${API_BASE}/api/v1/generated-models`);
+        if (diskRes.ok) {
+          const diskData = await diskRes.json();
+          if (diskData.models && diskData.models.length > 0) {
+            const disk: GeneratedModel[] = diskData.models.map((m: any) => ({
+              id: m.id,
+              previewUrl: m.preview_url.startsWith('http') ? m.preview_url : `${API_BASE}${m.preview_url}`,
+              downloadUrl: m.download_url.startsWith('http') ? m.download_url : `${API_BASE}${m.download_url}`,
+              format: m.format || 'glb',
+              source: 'image-to-3d',
+              createdAt: m.created_at,
+            }));
+            setGeneratedModels(disk);
           }
         }
       } catch { /* Backend not reachable yet */ }
