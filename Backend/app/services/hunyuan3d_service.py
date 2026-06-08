@@ -871,17 +871,6 @@ class Hunyuan3DService:
         return result
 
 
-# --- Singleton ---
-_service: Optional[Hunyuan3DService] = None
-
-
-def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None, vector_store: Optional[VectorStore] = None) -> Hunyuan3DService:
-    global _service
-    if settings is None:
-        settings = Hunyuan3DSettings()
-    _service = Hunyuan3DService(settings, vector_store=vector_store)
-    return _service
-
     def retexture(self, uid: str, prompt: str = "", seed: int = 0, out_type: str = "glb") -> dict:
         """Re-apply texture to an existing mesh from a new text-guided reference image."""
         import trimesh as _trimesh
@@ -934,6 +923,18 @@ def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None, vector_store: O
 
         empty_cache()
         return result
+
+
+# --- Singleton ---
+_service: Optional[Hunyuan3DService] = None
+
+
+def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None, vector_store: Optional[VectorStore] = None) -> Hunyuan3DService:
+    global _service
+    if settings is None:
+        settings = Hunyuan3DSettings()
+    _service = Hunyuan3DService(settings, vector_store=vector_store)
+    return _service
 
 
 def get_hunyuan3d() -> Hunyuan3DService:
