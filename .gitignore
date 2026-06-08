@@ -40,3 +40,18 @@ node_modules/
 # Compiled C extensions (rebuilt by setup.sh)
 *.cpython-*-darwin.so
 mesh_processor.cpp
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
