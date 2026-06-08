@@ -1,7 +1,15 @@
 #!/bin/bash
 # Writes a spawn request JSON and launches Unity Editor if it is not running.
-# REPO_ROOT is substituted by register-uri.sh at install time.
+# REPO_ROOT is substituted by register-launcher at install time.
 set -euo pipefail
+
+# AppleScript's do shell script uses a minimal PATH that excludes Homebrew.
+# Expand it so python3 and other tools are reachable regardless of install path.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+# Also source the user's shell profile if present, to pick up pyenv / nvm / etc.
+[ -f "$HOME/.zprofile" ] && source "$HOME/.zprofile" 2>/dev/null || true
+[ -f "$HOME/.bash_profile" ] && source "$HOME/.bash_profile" 2>/dev/null || true
 
 REPO="__REPO_ROOT__"
 URL="${1:-}"
@@ -11,15 +19,22 @@ if [ -z "$URL" ]; then
   exit 2
 fi
 
+# Resolve python3: prefer the system one, fall back to common locations.
+PYTHON3="$(command -v python3 2>/dev/null || echo /opt/homebrew/bin/python3)"
+if [ ! -x "$PYTHON3" ]; then
+  osascript -e 'display dialog "Unity Launcher: python3 not found. Install Python 3 via Homebrew (brew install python3)." buttons {"OK"} default button 1'
+  exit 1
+fi
+
 REQDIR="$REPO/UnityProject/Assets/SpawnRequests"
 PARSER="$REPO/scripts/UnityLauncher/parse.py"
 
 mkdir -p "$REQDIR"
 
-STAMP="$(python3 -c 'import time;print(f"{int(time.time()*1000000)}")')"
+STAMP="$("$PYTHON3" -c 'import time;print(f"{int(time.time()*1000000)}")')"
 OUT="$REQDIR/spawn_${STAMP}.json"
 
-python3 "$PARSER" "$URL" > "$OUT.tmp"
+"$PYTHON3" "$PARSER" "$URL" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
 # Launch Unity Editor on the project if no Unity is already running.

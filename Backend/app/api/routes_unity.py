@@ -192,13 +192,19 @@ def register_launcher():
         )
         handler_sh.chmod(0o755)
 
+        # Strip quarantine so macOS doesn't block the URL handler.
         subprocess.run(
-            [LSREGISTER, "-f", str(APP_PATH)],
-            check=True, capture_output=True, text=True,
+            ["xattr", "-cr", str(APP_PATH)],
+            capture_output=True, text=True,
+        )
+        # Unregister any stale/duplicate bindings first.
+        subprocess.run(
+            [LSREGISTER, "-u", str(APP_PATH)],
+            capture_output=True, text=True,
         )
         subprocess.run(
-            ["open", "-gj", str(APP_PATH)],
-            capture_output=True, text=True,
+            [LSREGISTER, "-R", "-f", str(APP_PATH)],
+            check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as exc:
         logger.exception("Launcher install failed")
