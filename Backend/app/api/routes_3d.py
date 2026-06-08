@@ -450,7 +450,7 @@ def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
 
         # Don't overwrite a cancellation that arrived while we were running
         if _pending_results.get(uid) != {"status": "cancelled"}:
-            _persist_to_gallery(uid, result, prompt=prompt, source=source)
+            _persist_to_gallery(result.get("uid", uid), result, prompt=prompt, source=source)
             _pending_results[uid] = {"status": "completed", **result}
             _progress[uid] = {"stage": "completed", "pct": 100, **result}
 
