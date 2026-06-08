@@ -1,4 +1,6 @@
 import React from 'react';
+import './tailwind.css';
+import './index.css';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ThemeProvider } from './components/ThemeContext';

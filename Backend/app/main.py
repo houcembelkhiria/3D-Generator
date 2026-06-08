@@ -65,9 +65,9 @@ tags_metadata = [
 ]
 
 app = FastAPI(
-    title="3D Generator API",
+    title="3D Generator API v2",
     description="Unified API for document processing and 3D model generation using Hunyuan3D.",
-    version="2.0.0",
+    version="2.1.0-dev",
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_tags=tags_metadata,
@@ -97,7 +97,7 @@ app.include_router(routes_unity.router)
 
 @app.get("/", tags=["System"])
 async def root():
-    return {"message": "3D Generator API is running", "version": "2.0.0"}
+    return {"message": "3D Generator API v2 is running", "version": "2.1.0-dev"}
 
 
 @app.get("/health", tags=["System"])

@@ -16,18 +16,26 @@ interface LauncherStatus {
   repo_root?: string;
 }
 
-const fireUnityUri = (model: GeneratedModel, scene: UnityScene) => {
-  const raw = model.downloadUrl;
+const spawnViaApi = async (model: GeneratedModel, scene: UnityScene): Promise<void> => {
+  // previewUrl is always .glb; downloadUrl may be OBJ/STL/GLTF.
+  const raw = model.previewUrl;
   const abs = /^https?:\/\//i.test(raw)
     ? raw
     : `${API_BASE}${raw.startsWith('/') ? '' : '/'}${raw}`;
-  const q = new URLSearchParams({
-    url: abs,
-    scene,
-    id: model.id,
-    name: (model.prompt ?? model.id).slice(0, 60),
+  const r = await fetch(`${API_BASE}/api/v1/unity/spawn`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url: abs,
+      scene,
+      id: model.id,
+      name: (model.prompt ?? model.id).slice(0, 60),
+    }),
   });
-  window.location.href = `unity3dgen://spawn?${q.toString()}`;
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+    throw new Error(body.detail ?? `HTTP ${r.status}`);
+  }
 };
 
 const fetchStatus = async (): Promise<LauncherStatus> => {
@@ -48,6 +56,7 @@ const installLauncher = async (): Promise<LauncherStatus> => {
 interface ModelGalleryProps {
   models: GeneratedModel[];
   onRemove?: (id: string) => void;
+  onSpawn?: () => void;
 }
 
 const sourceLabels: Record<GeneratedModel['source'], string> = {
@@ -62,7 +71,7 @@ const sourceColors: Record<GeneratedModel['source'], string> = {
   'multiview-to-3d': 'bg-emerald-500/20 text-emerald-400',
 };
 
-export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove }) => {
+export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, onSpawn }) => {
   const [selectedModel, setSelectedModel] = useState<GeneratedModel | null>(null);
   const [unityMenuFor, setUnityMenuFor] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -106,20 +115,14 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove }) 
   }, []);
 
   const openInUnity = useCallback(async (model: GeneratedModel, scene: UnityScene) => {
-    let s = status;
-    if (!s) {
-      try { s = await fetchStatus(); setStatus(s); } catch { /* fall through */ }
+    setInstallError(null);
+    try {
+      await spawnViaApi(model, scene);
+      onSpawn?.();
+    } catch (e: any) {
+      setInstallError(e?.message ?? String(e));
     }
-    if (s && !s.supported) {
-      setInstallError(s.reason ?? 'Unity launcher is not supported on this host.');
-      return;
-    }
-    if (!s || !s.registered || s.repo_match === false) {
-      const installed = await install();
-      if (!installed || !installed.registered) return;
-    }
-    fireUnityUri(model, scene);
-  }, [status, install]);
+  }, []);
 
   const needsInstall =
     status !== null && status.supported && (!status.registered || status.repo_match === false);
@@ -362,6 +365,7 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove }) 
           </div>
         </div>
       )}
+
     </div>
   );
 };

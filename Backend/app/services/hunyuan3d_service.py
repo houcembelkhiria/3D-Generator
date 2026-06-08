@@ -386,8 +386,10 @@ class Hunyuan3DService:
         """Remove background only when needed — skip if image already has transparent pixels."""
         if image.mode == "RGBA":
             alpha = np.array(image.getchannel("A"))
-            if alpha.min() < 200:
-                logger.info("Skipping rembg — image already has transparent background")
+            # Require >5% of pixels to be nearly fully transparent before trusting existing alpha
+            transparent_fraction = (alpha < 10).mean()
+            if transparent_fraction > 0.05:
+                logger.info("Skipping rembg — image already has transparent background (%.0f%% transparent)", transparent_fraction * 100)
                 return image
         return self.rembg(image.convert("RGB"))
 
@@ -788,6 +790,17 @@ class Hunyuan3DService:
                 pil = self._decode_b64_image(b64)
                 pil = self._remove_background(pil)
                 image_dict[view_name] = pil
+                try:
+                    import os as _os
+                    from hy3dgen.shapegen.preprocessors import ImageProcessorV2 as _IVP
+                    _dbg_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
+                    _os.makedirs(_dbg_dir, exist_ok=True)
+                    pil.save(_os.path.join(_dbg_dir, f'mv_rembg_{view_name}.png'))
+                    _proc = _IVP(size=512)
+                    _img_np, _ = _proc.load_image(pil, border_ratio=0.15, to_tensor=False)
+                    Image.fromarray(_img_np).save(_os.path.join(_dbg_dir, f'mv_model_input_{view_name}.png'))
+                except Exception as _e:
+                    logger.debug("MV debug save failed: %s", _e)
 
         # Each generation is independent — no cross-request parameter modification.
         _embedding = None

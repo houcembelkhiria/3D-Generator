@@ -18,5 +18,6 @@ celery_app.conf.update(
     task_routes={
         "app.tasks.process_document": {"queue": "document_processing"},
         "app.tasks.generate_3d_model": {"queue": "3d_generation"},
+        "app.tasks.run_pipeline": {"queue": "3d_generation"},
     },
 )

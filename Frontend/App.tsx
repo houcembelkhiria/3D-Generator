@@ -37,6 +37,8 @@ export default function App() {
   const [generatedModels, setGeneratedModels] = useState<GeneratedModel[]>([]);
   // Keep generation views mounted once visited so in-progress jobs survive tab switches
   const [mountedViews, setMountedViews] = useState<Set<AppView>>(() => new Set([activeView]));
+  const [spawnMsg, setSpawnMsg] = useState<string | null>(null);
+  const spawnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [currentStep, setCurrentStep] = useState<PipelineStep>(PipelineStep.IDLE);
   const [logs, setLogs] = useState<ProcessLog[]>([]);
   const [metadata, setMetadata] = useState<AssetMetadata | null>(null);
@@ -332,8 +334,7 @@ export default function App() {
 
   const handleModelRemove = useCallback((id: string) => {
     setGeneratedModels(prev => prev.filter(m => m.id !== id));
-    // Also delete from backend vector cache
-    fetch(`${API_BASE}/api/v1/cache/${id}`, { method: 'DELETE' }).catch(() => {});
+    fetch(`${API_BASE}/api/v1/models/${id}`, { method: 'DELETE' }).catch(() => {});
   }, []);
 
   const isProcessing = currentStep !== PipelineStep.IDLE && currentStep !== PipelineStep.COMPLETED && currentStep !== PipelineStep.ERROR;
@@ -640,10 +641,30 @@ export default function App() {
 
           {/* VIEW: MODEL GALLERY */}
           {activeView === 'gallery' && (
-            <ModelGallery models={generatedModels} onRemove={handleModelRemove} />
+            <ModelGallery
+              models={generatedModels}
+              onRemove={handleModelRemove}
+              onSpawn={() => {
+                if (spawnTimerRef.current) clearTimeout(spawnTimerRef.current);
+                setSpawnMsg('Sent to Unity — the model is downloading and importing. This can take 10–30 s; check the Unity Console if it doesn\'t appear.');
+                spawnTimerRef.current = setTimeout(() => setSpawnMsg(null), 12000);
+              }}
+            />
           )}
 
         </main>
+
+      {/* Global spawn toast — persists across tab switches */}
+      {spawnMsg && (
+        <div className="fixed top-6 right-6 z-50 flex items-start gap-3 max-w-sm w-full px-4 py-3 rounded-xl border border-sky-500/40 bg-[var(--bg-card)] shadow-2xl text-sky-300 text-sm">
+          <svg className="animate-spin h-4 w-4 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+          <span className="flex-1 leading-snug">{spawnMsg}</span>
+          <button type="button" onClick={() => setSpawnMsg(null)} className="text-sky-400 hover:text-sky-200 shrink-0 text-xs mt-0.5">✕</button>
+        </div>
+      )}
       </div>
     </div>
   );

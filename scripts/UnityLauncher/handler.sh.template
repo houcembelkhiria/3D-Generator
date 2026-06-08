@@ -3,13 +3,7 @@
 # REPO_ROOT is substituted by register-launcher at install time.
 set -euo pipefail
 
-# AppleScript's do shell script uses a minimal PATH that excludes Homebrew.
-# Expand it so python3 and other tools are reachable regardless of install path.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-
-# Also source the user's shell profile if present, to pick up pyenv / nvm / etc.
-[ -f "$HOME/.zprofile" ] && source "$HOME/.zprofile" 2>/dev/null || true
-[ -f "$HOME/.bash_profile" ] && source "$HOME/.bash_profile" 2>/dev/null || true
 
 REPO="__REPO_ROOT__"
 URL="${1:-}"
@@ -19,25 +13,57 @@ if [ -z "$URL" ]; then
   exit 2
 fi
 
-# Resolve python3: prefer the system one, fall back to common locations.
-PYTHON3="$(command -v python3 2>/dev/null || echo /opt/homebrew/bin/python3)"
-if [ ! -x "$PYTHON3" ]; then
+# Resolve python3 from safe explicit paths, excluding Xcode's binary.
+PYTHON3=""
+for _p in \
+    /opt/homebrew/bin/python3 \
+    /opt/homebrew/opt/python@3.13/bin/python3 \
+    /opt/homebrew/opt/python@3.12/bin/python3 \
+    /opt/homebrew/opt/python@3.11/bin/python3 \
+    /usr/local/bin/python3 \
+    /usr/bin/python3; do
+  if [ -x "$_p" ] && [[ "$_p" != /Applications/Xcode* ]]; then
+    PYTHON3="$_p"
+    break
+  fi
+done
+
+if [ -z "$PYTHON3" ]; then
   osascript -e 'display dialog "Unity Launcher: python3 not found. Install Python 3 via Homebrew (brew install python3)." buttons {"OK"} default button 1'
   exit 1
 fi
 
 REQDIR="$REPO/UnityProject/Assets/SpawnRequests"
-PARSER="$REPO/scripts/UnityLauncher/parse.py"
-
 mkdir -p "$REQDIR"
 
 STAMP="$("$PYTHON3" -c 'import time;print(f"{int(time.time()*1000000)}")')"
 OUT="$REQDIR/spawn_${STAMP}.json"
 
-"$PYTHON3" "$PARSER" "$URL" > "$OUT.tmp"
+# Parse the unity3dgen:// URL inline via -c so python3 never needs to open a
+# file on the Desktop (macOS TCC blocks .app-bundled python3 from doing that).
+"$PYTHON3" -c '
+import sys, json, time
+from urllib.parse import parse_qs, unquote, urlparse
+uri = sys.argv[1]
+p = urlparse(uri)
+q = {k: v[0] for k, v in parse_qs(p.query).items()}
+url = unquote(q.get("url", ""))
+if not url:
+    sys.exit("unity3dgen: missing url parameter")
+scene = q.get("scene", "existing").lower()
+if scene not in ("new", "existing"):
+    scene = "existing"
+req = {
+    "id": q.get("id") or "model_" + str(int(time.time() * 1000)),
+    "url": url,
+    "scene": scene,
+    "name": unquote(q.get("name", "")),
+}
+print(json.dumps(req))
+' "$URL" > "$OUT.tmp"
 mv "$OUT.tmp" "$OUT"
 
-# Launch Unity Editor on the project if no Unity is already running.
+# Launch Unity Editor on the project if not already running.
 if ! pgrep -xq Unity; then
   open -a Unity --args -projectPath "$REPO/UnityProject" >/dev/null 2>&1 || \
     osascript -e 'display dialog "Could not launch Unity Editor. Install Unity Hub and make sure Unity 2022.3 LTS is available." buttons {"OK"} default button 1'

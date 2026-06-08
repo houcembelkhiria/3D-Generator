@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -219,3 +220,53 @@ def register_launcher():
         "app_path": str(APP_PATH),
         "repo_root": str(REPO_ROOT),
     }
+
+
+class _SpawnBody(BaseModel):
+    url: str
+    scene: str = "existing"
+    id: str = ""
+    name: str = ""
+
+
+@router.post("/spawn")
+def spawn_model(body: _SpawnBody):
+    """Write a SpawnRequest JSON directly and launch Unity Editor if not running.
+
+    This avoids the unity3dgen:// URL scheme entirely — the browser calls this
+    endpoint instead, so no tab navigation or custom URL scheme is needed.
+    """
+    _guard_host()
+
+    import json
+    import time
+
+    req_dir = REPO_ROOT / "UnityProject" / "Assets" / "SpawnRequests"
+    req_dir.mkdir(parents=True, exist_ok=True)
+
+    stamp = int(time.time() * 1_000_000)
+    req_file = req_dir / f"spawn_{stamp}.json"
+    data = {
+        "id": body.id or f"model_{int(time.time() * 1000)}",
+        "url": body.url,
+        "scene": body.scene if body.scene in ("new", "existing") else "existing",
+        "name": body.name[:60],
+    }
+    req_file.write_text(json.dumps(data))
+
+    # Launch Unity Editor if not already running.
+    try:
+        running = subprocess.run(
+            ["pgrep", "-xq", "Unity"], capture_output=True
+        ).returncode == 0
+        if not running:
+            subprocess.Popen(
+                ["open", "-a", "Unity", "--args", "-projectPath",
+                 str(REPO_ROOT / "UnityProject")],
+                start_new_session=True,
+            )
+    except Exception as exc:
+        logger.warning("Unity launch check failed: %s", exc)
+
+    return {"spawned": True}
+

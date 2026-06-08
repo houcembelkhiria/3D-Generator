@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  redis-v2:
+    image: redis:7-alpine
+    container_name: 3d-generator-v2-redis
+    ports:
+      - "9511:6379"
+    volumes:
+      - redis_v2_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - 3d-generator-v2-network
+
+  celery-worker-v2:
+    build:
+      context: ./Backend-v2
+      dockerfile: Dockerfile
+    container_name: 3d-generator-v2-celery-worker
+    command: celery -A app.worker worker --loglevel=info
+    volumes:
+      - ./Backend-v2:/app
+      - uploads_v2:/app/uploads
+      - generated_v2:/app/generated
+    environment:
+      - REDIS_URL=redis://redis-v2:6379/0
+      - CELERY_BROKER_URL=redis://redis-v2:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis-v2:6379/0
+    depends_on:
+      - redis-v2
+      - backend-v2
+    restart: unless-stopped
+    networks:
+      - 3d-generator-v2-network
+
+  celery-beat-v2:
+    build:
+      context: ./Backend-v2
+      dockerfile: Dockerfile
+    container_name: 3d-generator-v2-celery-beat
+    command: celery -A app.worker beat --loglevel=info
+    volumes:
+      - ./Backend-v2:/app
+    environment:
+      - REDIS_URL=redis://redis-v2:6379/0
+      - CELERY_BROKER_URL=redis://redis-v2:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis-v2:6379/0
+    depends_on:
+      - redis-v2
+      - backend-v2
+    restart: unless-stopped
+    networks:
+      - 3d-generator-v2-network
+
+  backend-v2:
+    build:
+      context: ./Backend-v2
+      dockerfile: Dockerfile
+    container_name: 3d-generator-v2-backend
+    ports:
+      - "9512:8001"
+    volumes:
+      - ./Backend-v2:/app
+      - uploads_v2:/app/uploads
+      - generated_v2:/app/generated
+    environment:
+      - REDIS_URL=redis://redis-v2:6379/0
+      - CELERY_BROKER_URL=redis://redis-v2:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis-v2:6379/0
+      - PYTHONPATH=/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001
+    depends_on:
+      - redis-v2
+    restart: unless-stopped
+    networks:
+      - 3d-generator-v2-network
+
+  frontend-v2:
+    build:
+      context: ./Frontend-v2
+      dockerfile: Dockerfile
+    container_name: 3d-generator-v2-frontend
+    ports:
+      - "9513:3001"
+    volumes:
+      - ./Frontend-v2:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8001
+      - NODE_ENV=development
+    depends_on:
+      - backend-v2
+    restart: unless-stopped
+    networks:
+      - 3d-generator-v2-network
+
+volumes:
+  redis_v2_data:
+    driver: local
+  uploads_v2:
+    driver: local
+  generated_v2:
+    driver: local
+
+networks:
+  3d-generator-v2-network:
+    driver: bridge

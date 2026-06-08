@@ -22,6 +22,16 @@ namespace ThreeDGenerator.Editor
         {
             Directory.CreateDirectory(ReqDir);
             Directory.CreateDirectory(ImpDir);
+            // Purge requests that pre-date this Editor session (e.g. left over
+            // from a crash). Anything older than 60 s at startup is stale.
+            try
+            {
+                var cutoff = DateTime.UtcNow.AddSeconds(-60);
+                foreach (var f in Directory.GetFiles(ReqDir, "*.json"))
+                    if (File.GetLastWriteTimeUtc(f) < cutoff)
+                        File.Delete(f);
+            }
+            catch { }
             EditorApplication.update += Tick;
         }
 
@@ -58,8 +68,15 @@ namespace ThreeDGenerator.Editor
                 var id = string.IsNullOrEmpty(req.id)
                     ? DateTime.UtcNow.Ticks.ToString()
                     : Sanitize(req.id);
-                var glbPath = Path.Combine(ImpDir, $"{id}.glb");
-                var assetPath = $"{ImpAssetDir}/{id}.glb";
+                // Derive the file extension from the URL so we correctly handle
+                // whatever format the backend served (glb, gltf, obj, …).
+                // glTFast handles glb/gltf; other formats fall back to Unity's
+                // built-in importers. The URL is always an absolute http URL.
+                string urlExt = "glb";
+                try { urlExt = System.IO.Path.GetExtension(new Uri(req.url).LocalPath).TrimStart('.').ToLower(); } catch { }
+                if (string.IsNullOrEmpty(urlExt)) urlExt = "glb";
+                var glbPath = Path.Combine(ImpDir, $"{id}.{urlExt}");
+                var assetPath = $"{ImpAssetDir}/{id}.{urlExt}";
 
                 Debug.Log($"[SpawnBridge] downloading {req.url}");
                 var www = UnityWebRequest.Get(req.url);
@@ -92,6 +109,11 @@ namespace ThreeDGenerator.Editor
                         }
 
                         var go = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+                        if (go == null)
+                        {
+                            Debug.LogError($"[SpawnBridge] PrefabUtility.InstantiatePrefab returned null for {assetPath}");
+                            return;
+                        }
                         if (!string.IsNullOrEmpty(req.name)) go.name = req.name;
                         Selection.activeGameObject = go;
                         var sv = SceneView.lastActiveSceneView;

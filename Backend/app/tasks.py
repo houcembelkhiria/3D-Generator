@@ -275,3 +275,42 @@ def _mesh_to_obj_format(self, mesh_data: dict) -> str:
         lines.append(f"f {face[0] + 1} {face[1] + 1} {face[2] + 1}")
     
     return "\n".join(lines)
+
+@celery_app.task(bind=True)
+def run_pipeline(self, file_path: str, file_type: str) -> dict:
+    """Run the LangGraph 3D generation pipeline end-to-end."""
+    from app.pipeline.graph import pipeline
+    from app.pipeline.state import Pipeline3DState
+
+    self.update_state(state="PROCESSING", meta={"status": "Starting LangGraph pipeline"})
+    logger.info("run_pipeline: %s (%s)", file_path, file_type)
+
+    initial_state: Pipeline3DState = {
+        "file_path": file_path,
+        "file_type": file_type,
+        "raw_text": "",
+        "parsed_content": {},
+        "spec": None,
+        "spec_valid": False,
+        "spec_retry_count": 0,
+        "mesh_output": None,
+        "mesh_valid": False,
+        "mesh_retry_count": 0,
+        "model_info": None,
+        "errors": [],
+        "current_step": "parse_document",
+    }
+
+    try:
+        final_state = pipeline.invoke(initial_state)
+        model_info = final_state.get("model_info") or {}
+        self.update_state(
+            state="COMPLETED",
+            meta={"status": "Pipeline complete", "model_info": model_info},
+        )
+        return model_info
+    except Exception as e:
+        error_msg = f"Pipeline failed: {e}"
+        logger.error(error_msg)
+        self.update_state(state="FAILED", meta={"status": "Pipeline failed", "error": str(e)})
+        raise

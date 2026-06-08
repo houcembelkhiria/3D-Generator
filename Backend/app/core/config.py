@@ -4,7 +4,7 @@ from typing import Optional
 class Settings(BaseSettings):
     # API Settings
     API_V1_STR: str = "/api/v1"
-    PROJECT_NAME: str = "3D Generator API"
+    PROJECT_NAME: str = "3D Generator API v2"
     
     # Redis Settings
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
     
     # CORS Settings
-    BACKEND_CORS_ORIGINS: list = ["http://localhost:3000", "http://localhost:8000"]
+    BACKEND_CORS_ORIGINS: list = ["http://localhost:3001", "http://localhost:8001"]
     
     class Config:
         env_file = ".env"

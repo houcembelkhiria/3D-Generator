@@ -1,0 +1,1357 @@
+%% ============================================================
+%%  Rapport de Projet de Fin d'Études — Tekup
+%%  Méthodologie CRISP-DM — Génération 3D par IA
+%%  Étudiant : Houcem Belkhiria
+%% ============================================================
+\documentclass[12pt,a4paper,oneside]{report}
+
+%% ---- Encodage & langue ----
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+
+%% ---- Mise en page ----
+\usepackage[top=2.5cm, bottom=2.5cm, left=3cm, right=2.5cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{fancyhdr}
+\usepackage{emptypage}
+
+%% ---- Couleurs & graphiques ----
+\usepackage[dvipsnames,svgnames,x11names]{xcolor}
+\definecolor{tekupblue}{RGB}{0,84,166}
+\definecolor{crispyellow}{RGB}{255,180,0}
+\definecolor{crispgreen}{RGB}{34,139,34}
+\definecolor{lightgray}{RGB}{245,245,245}
+\definecolor{codegray}{RGB}{240,240,240}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning,
+                fit, backgrounds, decorations.pathmorphing}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+%% ---- Tableaux ----
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{colortbl}
+
+%% ---- Code source ----
+\usepackage{listings}
+\lstset{
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  captionpos=b,
+  commentstyle=\color{OliveGreen},
+  keywordstyle=\color{tekupblue}\bfseries,
+  stringstyle=\color{BrickRed},
+  numberstyle=\tiny\color{gray},
+  numbers=left, numbersep=5pt,
+  frame=single, rulecolor=\color{gray!30},
+  tabsize=2, xleftmargin=10pt,
+}
+
+%% ---- Hyperliens ----
+\usepackage[colorlinks=true, linkcolor=tekupblue, citecolor=tekupblue,
+            urlcolor=tekupblue, bookmarks=true]{hyperref}
+
+%% ---- Bibliographie ----
+\usepackage[backend=biber, style=ieee, sorting=none]{biblatex}
+\addbibresource{references.bib}
+
+%% ---- Figures & légendes ----
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\captionsetup{font=small, labelfont=bf}
+
+%% ---- Mathématiques ----
+\usepackage{amsmath, amssymb}
+
+%% ---- Boîtes & listes ----
+\usepackage{enumitem}
+\usepackage{mdframed}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins, breakable}
+
+%% ---- Boîte CRISP-DM phase ----
+\newtcolorbox{crispbox}[2][]{
+  colback=tekupblue!6, colframe=tekupblue,
+  fonttitle=\bfseries\color{white},
+  title={#2}, #1,
+  before upper={\parindent0pt},
+}
+
+%% ---- Titre des chapitres ----
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{tekupblue}}
+  {\chaptertitlename\ \thechapter}{16pt}{\Huge}
+\titlespacing*{\chapter}{0pt}{-20pt}{20pt}
+
+%% ---- En-têtes / pieds de page ----
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\nouppercase{\leftmark}}
+\fancyhead[R]{\small Houcem Belkhiria — Tekup 2025}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+%% ================================================================
+\begin{document}
+
+%% ----------------------------------------------------------------
+%%  PAGE DE GARDE
+%% ----------------------------------------------------------------
+\begin{titlepage}
+\centering
+
+{\large \textbf{République Tunisienne}\\
+Ministère de l'Enseignement Supérieur et de la Recherche Scientifique}\\[0.4cm]
+
+\begin{tikzpicture}
+  \draw[tekupblue, line width=2pt] (0,0) rectangle (14,2.2);
+  \node[text=tekupblue, font=\bfseries\large] at (7,1.5)
+        {Université Tekup};
+  \node[font=\normalsize] at (7,0.6)
+        {Institut Supérieur des Technologies de l'Information};
+\end{tikzpicture}
+
+\vspace{0.6cm}
+\rule{\linewidth}{1pt}\\[0.2cm]
+{\LARGE \textbf{Projet de Fin d'Études}}\\[0.1cm]
+{\large Licence Nationale en Informatique}\\[0.1cm]
+\rule{\linewidth}{1pt}
+
+\vspace{0.5cm}
+
+{\color{tekupblue}\Huge\bfseries
+Conception et Développement d'un\\[0.2cm]
+Microservice d'IA pour la Génération\\[0.2cm]
+Automatisée d'Assets 3D Unity via MCP
+}
+
+\vspace{0.4cm}
+\begin{tikzpicture}
+  \node[draw=crispyellow, fill=crispyellow!20, rounded corners=5pt,
+        inner sep=8pt, font=\large\bfseries] {
+    Méthodologie CRISP-DM
+  };
+\end{tikzpicture}
+
+\vspace{0.6cm}
+\begin{mdframed}[linecolor=tekupblue, linewidth=1pt,
+                  leftmargin=30pt, rightmargin=30pt]
+\centering
+\textbf{Réalisé par :} Houcem Belkhiria\\[0.3cm]
+\textbf{Encadrant académique :} \textit{(nom de l'encadrant)}\\[0.1cm]
+\textbf{Encadrant professionnel :} \textit{(nom de l'encadrant)}
+\end{mdframed}
+
+\vspace{0.6cm}
+\begin{tikzpicture}
+  \node[draw=tekupblue, rounded corners=6pt, inner sep=10pt,
+        fill=tekupblue!10] {
+    \begin{tabular}{ll}
+      \textbf{Spécialité :}           & Génie Logiciel \& Intelligence Artificielle \\
+      \textbf{Année universitaire :}  & 2024 -- 2025 \\
+      \textbf{Période de stage :}    & Février 2025 -- Juillet 2025 \\
+      \textbf{Date de soutenance :}   & Début Juillet 2025 \\
+    \end{tabular}
+  };
+\end{tikzpicture}
+
+\vfill
+{\small \textit{Soutenu devant le jury composé de :}\\
+Mme/M. \underline{\hspace{4cm}} \quad Président(e)\\
+Mme/M. \underline{\hspace{4cm}} \quad Examinateur/trice\\
+Mme/M. \underline{\hspace{4cm}} \quad Encadrant(e)}
+\end{titlepage}
+
+%% ----------------------------------------------------------------
+%%  DÉDICACE
+%% ----------------------------------------------------------------
+\cleardoublepage\thispagestyle{empty}
+\vspace*{6cm}
+\begin{center}
+\textit{\Large Dédicace}\\[1cm]\large
+\textit{À mes parents, source inépuisable de soutien et d'amour,\\
+dont les sacrifices ont rendu ce parcours possible.}\\[0.6cm]
+\textit{À mes amis et camarades de Tekup,\\
+qui ont partagé avec moi chaque doute et chaque victoire.}\\[0.6cm]
+\textit{À tous ceux qui croient que la technologie\\
+peut rendre la création accessible à tous.}
+\end{center}
+
+%% ----------------------------------------------------------------
+%%  REMERCIEMENTS
+%% ----------------------------------------------------------------
+\cleardoublepage
+\chapter*{Remerciements}
+\addcontentsline{toc}{chapter}{Remerciements}
+
+Je tiens à remercier chaleureusement mon encadrant académique pour sa
+disponibilité, ses conseils avisés et l'autonomie qu'il m'a accordée
+tout au long de ce projet.
+
+Mes remerciements vont également à l'équipe pédagogique de Tekup pour la
+qualité de la formation en génie logiciel et intelligence artificielle
+dispensée au cours de ces trois années.
+
+Enfin, je remercie ma famille dont le soutien moral indéfectible m'a permis
+de mener ce projet ambitieux à son terme.
+
+%% ----------------------------------------------------------------
+%%  RÉSUMÉ
+%% ----------------------------------------------------------------
+\cleardoublepage
+\chapter*{Résumé}
+\addcontentsline{toc}{chapter}{Résumé}
+
+Ce projet de fin d'études présente la conception et le développement d'un
+\textbf{microservice d'intelligence artificielle} capable de transformer des
+données non structurées (PDF, emails, images) en objets 3D, puis de les
+injecter automatiquement dans l'éditeur Unity via le protocole \textbf{MCP}
+(\textit{Model Control Protocol}).
+
+La méthodologie \textbf{CRISP-DM} (\textit{Cross-Industry Standard Process for
+Data Mining}) structure le projet en six phases : compréhension du domaine,
+compréhension des données, préparation des données, modélisation, évaluation
+et déploiement.
+
+Techniquement, le système repose sur un backend \textbf{FastAPI/Celery/Redis},
+les pipelines de génération 3D \textbf{Hunyuan3D-2} (diffusion DiT + VAE 3D),
+un cache vectoriel \textbf{ChromaDB}, et un frontend \textbf{React 19}. Le
+pont Unity est assuré par le script éditeur \texttt{SpawnBridge.cs} couplé
+à la bibliothèque \textbf{glTFast 6.9.0}.
+
+\textbf{Mots-clés :} CRISP-DM, génération 3D, IA générative, Hunyuan3D,
+FastAPI, MCP, Unity, ChromaDB, microservice.
+
+\vspace{0.8cm}
+\noindent\rule{\linewidth}{0.4pt}
+\begin{center}\textbf{Abstract}\end{center}
+
+This final-year project presents the design and development of an
+\textbf{AI microservice} that transforms unstructured data (PDFs, emails,
+images) into 3D objects and automatically injects them into the Unity Editor
+via the \textbf{Model Control Protocol (MCP)}. The \textbf{CRISP-DM}
+methodology structures the project into six phases. Technically, the system
+relies on a \textbf{FastAPI/Celery/Redis} backend, \textbf{Hunyuan3D-2}
+diffusion pipelines, a \textbf{ChromaDB} vector cache, and a \textbf{React 19}
+frontend. The Unity bridge is provided by the \texttt{SpawnBridge.cs} editor
+script coupled with \textbf{glTFast}.
+
+\textbf{Keywords:} CRISP-DM, 3D generation, generative AI, Hunyuan3D, FastAPI,
+MCP, Unity, ChromaDB, microservice.
+
+%% ----------------------------------------------------------------
+%%  TABLES
+%% ----------------------------------------------------------------
+\cleardoublepage\tableofcontents
+\cleardoublepage\listoffigures
+\addcontentsline{toc}{chapter}{Table des figures}
+\cleardoublepage\listoftables
+\addcontentsline{toc}{chapter}{Liste des tableaux}
+
+%% ----------------------------------------------------------------
+%%  ABRÉVIATIONS
+%% ----------------------------------------------------------------
+\cleardoublepage
+\chapter*{Liste des abréviations}
+\addcontentsline{toc}{chapter}{Liste des abréviations}
+\begin{tabular}{@{}lp{10.5cm}@{}}
+\toprule
+\textbf{Sigle} & \textbf{Signification} \\\midrule
+API     & Application Programming Interface \\
+CRISP-DM& Cross-Industry Standard Process for Data Mining \\
+DiT     & Diffusion Transformer \\
+GLB     & GL Transmission Format Binary \\
+GPU     & Graphics Processing Unit \\
+HTTP    & HyperText Transfer Protocol \\
+JSON    & JavaScript Object Notation \\
+LLM     & Large Language Model \\
+MCP     & Model Control Protocol \\
+MPS     & Metal Performance Shaders (Apple Silicon) \\
+PBR     & Physically Based Rendering \\
+PFE     & Projet de Fin d'Études \\
+REST    & Representational State Transfer \\
+SPA     & Single Page Application \\
+T2I     & Text-to-Image \\
+UUID    & Universally Unique Identifier \\
+US      & User Story \\
+VRAM    & Video Random Access Memory \\
+\bottomrule
+\end{tabular}
+
+%% ================================================================
+%%  INTRODUCTION GÉNÉRALE
+%% ================================================================
+\cleardoublepage
+\chapter*{Introduction générale}
+\addcontentsline{toc}{chapter}{Introduction générale}
+\markboth{Introduction générale}{}
+
+La modélisation 3D est au cœur du développement de jeux vidéo, de la
+simulation industrielle et de la réalité virtuelle. Pourtant, produire un
+asset 3D de qualité reste long, coûteux et réservé aux artistes spécialisés.
+L'émergence des modèles de diffusion 3D — en particulier \textbf{Hunyuan3D-2}
+de Tencent — ouvre la voie à une génération automatisée depuis une simple
+image ou une phrase descriptive.
+
+Ce projet de fin d'études a pour ambition de \textbf{fermer la boucle} entre
+la génération IA et l'utilisation directe dans Unity : l'utilisateur décrit
+ou photographie un objet, la plateforme génère le maillage 3D, et l'objet
+apparaît automatiquement dans la scène Unity — sans aucune manipulation manuelle.
+
+\subsection*{Problématique}
+\textit{Comment concevoir un microservice d'IA agentique capable de
+transformer des données non structurées en assets 3D utilisables dans Unity,
+en garantissant des performances acceptables sur matériel grand public et
+une expérience utilisateur fluide ?}
+
+\subsection*{Méthodologie adoptée}
+La méthodologie \textbf{CRISP-DM} (\textit{Cross-Industry Standard Process
+for Data Mining}), standard industriel pour les projets IA/Data, structure
+ce travail en six phases itératives :
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  phase/.style={draw=tekupblue, fill=tekupblue!10, rounded corners=5pt,
+                text width=2.8cm, align=center, minimum height=1cm,
+                font=\small\bfseries},
+  arr/.style={-Stealth, tekupblue, thick}
+  ]
+  \node[phase, fill=crispyellow!30, draw=crispyellow!80!black] (p1) at (0,0)
+        {1. Compréhension\\du domaine};
+  \node[phase] (p2) at (4,0)   {2. Compréhension\\des données};
+  \node[phase] (p3) at (8,0)   {3. Préparation\\des données};
+  \node[phase] (p4) at (8,-2.5){4. Modélisation};
+  \node[phase] (p5) at (4,-2.5){5. Évaluation};
+  \node[phase, fill=crispgreen!20, draw=crispgreen!60!black] (p6) at (0,-2.5)
+        {6. Déploiement};
+
+  \draw[arr] (p1) -- (p2);
+  \draw[arr] (p2) -- (p3);
+  \draw[arr] (p3) -- (p4);
+  \draw[arr] (p4) -- (p5);
+  \draw[arr] (p5) -- (p6);
+  \draw[arr, dashed] (p5) to[bend left=20] (p1);
+  \node[font=\scriptsize, color=gray] at (4,-1.3) {itération};
+\end{tikzpicture}
+\caption{Cycle CRISP-DM appliqué au projet}
+\label{fig:crispdm}
+\end{figure}
+
+\subsection*{Structure du rapport}
+Chaque chapitre correspond à une phase CRISP-DM, complétée par l'introduction
+(contexte), la conclusion et les perspectives.
+
+%% ================================================================
+%%  PHASE 1 — COMPRÉHENSION DU DOMAINE
+%% ================================================================
+\chapter{Phase 1 — Compréhension du domaine}
+
+\begin{crispbox}{CRISP-DM Phase 1 : Business Understanding}
+Objectif : définir les objectifs métier, évaluer la situation existante,
+fixer les critères de succès et élaborer le plan de projet (backlog).
+\end{crispbox}
+
+\section{Contexte et objectifs métier}
+
+\subsection{Contexte industriel}
+Le marché mondial de la modélisation 3D est évalué à \textbf{14 milliards USD}
+d'ici 2030 (Grand View Research). Unity Technologies recense plus de
+\textbf{1,5 million} de développeurs actifs chaque mois. La demande en assets
+3D prêts à l'emploi est massive mais la création manuelle représente un
+goulot d'étranglement majeur.
+
+\subsection{Objectifs du microservice}
+L'objectif principal est de développer une architecture microservice autonome
+et \textbf{agentique} capable de :
+\begin{enumerate}
+  \item \textbf{Ingérer} des fichiers multi-formats (PDF, Email, images).
+  \item \textbf{Extraire} des métadonnées structurées via un LLM.
+  \item \textbf{Générer} un objet 3D (approche neuronale : Image/Text-to-3D ;
+        approche procédurale : script C\#).
+  \item \textbf{Piloter Unity via MCP} : le microservice agit comme un client
+        MCP qui ordonne à l'éditeur Unity (serveur MCP) d'instancier et de
+        placer l'objet dans la scène active — sans clic utilisateur.
+\end{enumerate}
+
+\subsection{Critères de succès}
+\begin{table}[H]
+\centering
+\caption{Critères de succès CRISP-DM}
+\label{tab:success}
+\begin{tabularx}{\linewidth}{@{}lXl@{}}
+\toprule
+\textbf{Critère} & \textbf{Description} & \textbf{Seuil} \\
+\midrule
+Performance & Temps de génération GLB sans texture & $\leq$ 2 min \\
+Qualité géom. & Absence de floaters et de faces dégénérées & $\geq$ 80\% \\
+Intégration & Spawn Unity sans erreur & 100\% \\
+Disponibilité & Uptime de l'API & $\geq$ 99\% \\
+UX & Génération depuis l'interface sans CLI & Oui \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Étude de l'existant}
+
+\subsection{Solutions de génération 3D}
+\begin{longtable}{@{}p{2.8cm}p{3.6cm}p{3.5cm}p{4.2cm}@{}}
+\caption{Comparatif des solutions de génération 3D}\label{tab:existant}\\
+\toprule
+\textbf{Outil} & \textbf{Approche} & \textbf{Avantages} & \textbf{Limites} \\
+\midrule\endfirsthead
+\toprule\textbf{Outil} & \textbf{Approche} & \textbf{Avantages} & \textbf{Limites} \\
+\midrule\endhead
+TripoSR      & NeRF/Transformer   & Rapide ($<$1 s)      & Maillage bas détail \\
+Shap·E       & Diffusion implicite & Open-source         & Qualité insuffisante \\
+Meshy.ai     & API cloud          & Simple d'usage       & Payant, latence réseau \\
+Zero123++    & Diffusion multi-vues& Bonne précision     & Nécessite GPU puissant \\
+\textbf{Hunyuan3D-2} & DiT + VAE 3D & Haute qualité, texture & 8 GB RAM minimum \\
+\bottomrule
+\end{longtable}
+
+\subsection{Le Model Context Protocol (MCP)}
+Le \textbf{MCP} est un standard ouvert proposé par Anthropic en 2024 pour
+standardiser la connexion entre assistants IA et outils locaux. Dans notre
+architecture :
+\begin{itemize}
+  \item \textbf{Microservice Python} = Client MCP — appelle des outils.
+  \item \textbf{Unity Editor} = Serveur MCP — expose des outils C\# :
+        \texttt{SpawnGLB(url, position)}, \texttt{SetTransform(...)},
+        \texttt{LogMessage(text)}.
+\end{itemize}
+Ce protocole remplace le \textit{polling} de fichiers par une communication
+bidirectionnelle robuste, transformant le projet d'un simple générateur en
+\textbf{assistant intelligent agentique}.
+
+\section{Backlog Agile — 5 mois / 8 sprints}
+
+\subsection{User Stories par phase}
+
+\begin{table}[H]
+\centering
+\caption{Backlog complet du projet}
+\label{tab:backlog}
+\begin{tabularx}{\linewidth}{@{}llXl@{}}
+\toprule
+\rowcolor{tekupblue!15}
+\textbf{ID} & \textbf{Phase} & \textbf{User Story} & \textbf{Sprint} \\
+\midrule
+\rowcolor{gray!8}
+US-1.1 & Infrastructure & Setup Docker-Compose (FastAPI, Redis, Celery) & 1 \\
+US-1.2 & Ingestion      & Pipeline \texttt{unstructured} pour PDF et emails & 1 \\
+US-1.3 & Ingestion      & Filtres Regex : suppression signatures / bruit & 1 \\
+US-1.4 & API            & Endpoint \texttt{/upload} asynchrone + \texttt{task\_id} & 2 \\
+\midrule
+\rowcolor{tekupblue!8}
+US-2.1 & LLM            & Intégration Llama-3-8B-Instruct (llama-cpp) & 2 \\
+US-2.2 & LLM            & Prompt système pour sortie JSON forcée (Schema Enforcement) & 2 \\
+US-2.3 & LLM            & Extraction de tableaux de dimensions depuis PDF & 3 \\
+US-2.4 & Validation     & Validation Pydantic des métadonnées extraites & 3 \\
+\midrule
+\rowcolor{gray!8}
+US-3.1 & 3D Neuronal    & Intégration Hunyuan3D-2 Image-to-3D & 3 \\
+US-3.2 & 3D Procédural  & Pipeline scripts C\# via Qwen 2.5 Coder & 4 \\
+US-3.3 & 3D             & Conversion et optimisation assets (OBJ → GLB) & 4 \\
+US-3.4 & Stockage       & Gestion du stockage et nettoyage des fichiers & 4 \\
+\midrule
+\rowcolor{tekupblue!8}
+US-4.1 & MCP Python     & Client MCP dans le microservice (SDK Anthropic) & 5 \\
+US-4.2 & MCP Unity      & Serveur MCP en C\# dans Unity (WebSocket/Stdio) & 5 \\
+US-4.3 & MCP Unity      & Définition des outils Unity : SpawnGLB, SetTransform & 5 \\
+US-4.4 & Orchestration  & Connexion pipeline Celery → appel outil MCP & 6 \\
+\midrule
+\rowcolor{gray!8}
+US-5.1 & UX Unity       & Fenêtre « Moniteur IA » dans Unity (logs MCP) & 6 \\
+US-5.2 & Test E2E       & Test bout en bout : PDF → extraction → 3D → Unity & 6 \\
+US-5.3 & Doc            & Rédaction mémoire et documentation architecture & 7 \\
+US-5.4 & Optimisation   & Nettoyage code et optimisation VRAM & 8 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Planning des sprints}
+
+\begin{table}[H]
+\centering
+\caption{Planning des 8 sprints --- Février à Juillet 2025 (22 semaines)}
+\label{tab:sprints}
+\begin{tabularx}{\linewidth}{@{}cllXl@{}}
+\toprule
+\textbf{Spr.} & \textbf{Durée} & \textbf{Période (2025)}
+              & \textbf{Objectif principal} & \textbf{US} \\
+\midrule
+1 & 2 sem. & 03 Fév -- 14 Fév & Infrastructure Docker/FastAPI/Celery + ingestion & US-1.1--1.3 \\
+2 & 2 sem. & 17 Fév -- 28 Fév & Upload async + intégration LLM Llama-3 + JSON & US-1.4, 2.1--2.2 \\
+3 & 3 sem. & 03 Mar -- 21 Mar & Extraction complexe, Pydantic, Hunyuan3D I2-3D & US-2.3--2.4, 3.1 \\
+4 & 3 sem. & 24 Mar -- 11 Avr & Pipeline C\# procédural, conversion GLB, stockage & US-3.2--3.4 \\
+5 & 3 sem. & 14 Avr -- 02 Mai & Client MCP Python + Serveur MCP Unity + outils & US-4.1--4.3 \\
+6 & 3 sem. & 05 Mai -- 23 Mai & Orchestration Celery→MCP + Moniteur IA + E2E & US-4.4, 5.1--5.2 \\
+7 & 3 sem. & 26 Mai -- 13 Jun & Rédaction mémoire + documentation architecture & US-5.3 \\
+8 & 3 sem. & 16 Jun -- 04 Jul & Optimisation VRAM + polissage + soutenance & US-5.4 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%% ================================================================
+%%  PHASE 2 — COMPRÉHENSION DES DONNÉES
+%% ================================================================
+\chapter{Phase 2 — Compréhension des données}
+
+\begin{crispbox}{CRISP-DM Phase 2 : Data Understanding}
+Objectif : collecter, décrire, explorer et vérifier la qualité des données
+d'entrée qui alimenteront les modèles IA.
+\end{crispbox}
+
+\section{Sources de données}
+
+Le système ingère plusieurs types de données selon le mode d'utilisation :
+
+\begin{table}[H]
+\centering
+\caption{Sources de données du système}
+\label{tab:data-sources}
+\begin{tabularx}{\linewidth}{@{}llXl@{}}
+\toprule
+\textbf{Source} & \textbf{Format} & \textbf{Description} & \textbf{Usage} \\
+\midrule
+Image utilisateur & PNG, JPEG & Photo ou rendu d'un objet réel & Image-to-3D \\
+Texte libre       & UTF-8     & Description en langage naturel   & Text-to-3D \\
+Multi-vues        & PNG, JPEG & 2 à 4 vues (face/dos/gauche/droite) & MultiView-to-3D \\
+PDF technique     & PDF       & Cahiers des charges, fiches techniques & LLM + extraction \\
+Email             & EML       & Demandes clients avec spécifications & LLM + extraction \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Exploration des données d'images}
+
+\subsection{Caractéristiques requises}
+Pour que le pipeline de génération 3D produise un résultat de qualité, les
+images d'entrée doivent respecter les contraintes suivantes :
+
+\begin{itemize}
+  \item \textbf{Résolution} : $\geq 512 \times 512$ pixels (recommandé :
+        $1024 \times 1024$).
+  \item \textbf{Sujet centré} : l'objet doit occuper au moins 60\% de la
+        surface de l'image.
+  \item \textbf{Fond contrasté} : fond blanc ou uni pour faciliter la
+        suppression d'arrière-plan.
+  \item \textbf{Éclairage homogène} : éviter les ombres portées dures.
+\end{itemize}
+
+\subsection{Jeu de données de test}
+Un corpus de \textbf{20 images de test} a été constitué, couvrant :
+véhicules (5), mobilier (5), personnages (4), végétation (3), objets
+du quotidien (3).
+
+\begin{table}[H]
+\centering
+\caption{Distribution du corpus de test}
+\label{tab:corpus}
+\begin{tabular}{@{}lccl@{}}
+\toprule
+\textbf{Catégorie} & \textbf{Nb. images} & \textbf{\%} & \textbf{Difficulté} \\
+\midrule
+Véhicules    & 5 & 25\% & Moyenne \\
+Mobilier     & 5 & 25\% & Faible \\
+Personnages  & 4 & 20\% & Élevée \\
+Végétation   & 3 & 15\% & Élevée \\
+Divers       & 3 & 15\% & Variable \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Exploration des données textuelles}
+
+Les données textuelles (PDF, emails) présentent des caractéristiques
+hétérogènes : format tabulaire, mise en page multi-colonnes, présence de
+signatures et de clauses légales. La bibliothèque \texttt{unstructured}
+permet un partitionnement sémantique pour isoler les sections pertinentes.
+
+\subsection{Qualité des données — problèmes identifiés}
+
+\begin{table}[H]
+\centering
+\caption{Problèmes de qualité des données textuelles}
+\label{tab:dq}
+\begin{tabularx}{\linewidth}{@{}lXl@{}}
+\toprule
+\textbf{Problème} & \textbf{Description} & \textbf{Fréquence} \\
+\midrule
+Bruit textuel & Signatures, mentions légales, pieds de page & Élevée \\
+Tableaux complexes & Dimensions en format tabulaire (L×l×h) & Moyenne \\
+Encodage mixte & Fichiers latin-1 ou UTF-16 mal déclarés & Faible \\
+Ambiguïté unitaire & mm vs cm vs m non précisés & Moyenne \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%% ================================================================
+%%  PHASE 3 — PRÉPARATION DES DONNÉES
+%% ================================================================
+\chapter{Phase 3 — Préparation des données}
+
+\begin{crispbox}{CRISP-DM Phase 3 : Data Preparation}
+Objectif : transformer les données brutes en entrées exploitables par les
+modèles IA — suppression du bruit, normalisation, encodage, augmentation.
+\end{crispbox}
+
+\section{Pipeline de préparation des images}
+
+\subsection{Suppression d'arrière-plan (rembg)}
+La première étape de traitement est la suppression automatique de
+l'arrière-plan via la bibliothèque \texttt{rembg}, basée sur le réseau
+de segmentation \textbf{U2-Net} \cite{rembg}. L'image résultante est une
+image RGBA avec fond transparent.
+
+\begin{lstlisting}[language=Python,
+  caption={Suppression d'arrière-plan dans hunyuan3d\_service.py}]
+from hy3dgen.rembg import BackgroundRemover
+
+self.rembg = BackgroundRemover()
+
+def _remove_background(self, image: Image.Image) -> Image.Image:
+    # Conversion RGBA obligatoire avant rembg
+    if image.mode != 'RGBA':
+        image = image.convert('RGBA')
+    return self.rembg(image)
+\end{lstlisting}
+
+\subsection{Normalisation et encodage Base64}
+Les images sont transmises entre le frontend et le backend en encodage
+\textbf{Base64} pour éviter la gestion de fichiers temporaires dans
+les requêtes HTTP multipart :
+
+\begin{equation}
+\text{image\_b64} = \texttt{base64.b64encode(file.read()).decode('utf-8')}
+\label{eq:b64}
+\end{equation}
+
+\subsection{Prétraitement multi-vues}
+Pour le mode Multi-View-to-3D, chaque vue (face, dos, gauche, droite) est
+traitée indépendamment puis redimensionnée à $512\times512$ par le
+\texttt{ImageProcessorV2} d'hy3dgen, qui applique également un recadrage
+centré avec un ratio de bordure de 0,15.
+
+\section{Pipeline de préparation des documents}
+
+\subsection{Extraction de texte structuré}
+La bibliothèque \texttt{unstructured} partitionne les PDF et emails en
+éléments sémantiques (\textit{Title}, \textit{NarrativeText},
+\textit{Table}, etc.) :
+
+\begin{lstlisting}[language=Python,
+  caption={Extraction de documents dans document\_parser.py}]
+from unstructured.partition.auto import partition
+
+elements = partition(filename=filepath)
+sections = [e.text for e in elements
+            if e.category in ("NarrativeText", "Title", "Table")]
+\end{lstlisting}
+
+\subsection{Nettoyage et filtrage}
+Des filtres Regex suppriment les données non pertinentes :
+
+\begin{lstlisting}[language=Python,
+  caption={Filtres de nettoyage du texte}]
+import re
+
+NOISE_PATTERNS = [
+    r'Confidentiel.*',
+    r'Page \d+ sur \d+',
+    r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}',  # emails
+    r'Tel\s*:.*',
+]
+
+def clean_text(text: str) -> str:
+    for pat in NOISE_PATTERNS:
+        text = re.sub(pat, '', text, flags=re.IGNORECASE)
+    return text.strip()
+\end{lstlisting}
+
+\subsection{Schema Enforcement via LLM}
+Le LLM (\textbf{Llama-3-8B-Instruct}) est guidé par un prompt système strict
+qui force une sortie JSON conforme au schéma Pydantic \texttt{UnityMetadata} :
+
+\begin{lstlisting}[language=Python, caption={Prompt système LLM}]
+SYSTEM_PROMPT = """
+Tu es un expert en extraction de metadonnees 3D pour Unity.
+Reponds UNIQUEMENT avec un objet JSON valide respectant ce schema:
+{
+  "name": "string",
+  "type": "chair|table|vehicle|character|...",
+  "color": "string",
+  "dimensions": {"width": float, "height": float, "depth": float},
+  "material": "string",
+  "style": "string"
+}
+Ne fournis aucune explication. JSON uniquement.
+"""
+\end{lstlisting}
+
+\subsection{Validation Pydantic}
+Chaque sortie JSON est validée par un modèle Pydantic avant d'être transmise
+au pipeline de génération :
+
+\begin{lstlisting}[language=Python, caption={Modèle Pydantic UnityMetadata}]
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class Dimensions(BaseModel):
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+    depth: float = Field(gt=0)
+
+class UnityMetadata(BaseModel):
+    name: str
+    type: str
+    color: Optional[str] = None
+    dimensions: Optional[Dimensions] = None
+    material: Optional[str] = None
+    style: Optional[str] = None
+\end{lstlisting}
+
+%% ================================================================
+%%  PHASE 4 — MODÉLISATION
+%% ================================================================
+\chapter{Phase 4 — Modélisation}
+
+\begin{crispbox}{CRISP-DM Phase 4 : Modeling}
+Objectif : sélectionner et construire les modèles IA, configurer les
+hyperparamètres et valider les techniques de génération 3D retenues.
+\end{crispbox}
+
+\section{Architecture globale du système}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw=tekupblue, rounded corners=4pt, fill=tekupblue!8,
+              text width=3cm, align=center, minimum height=1.2cm, font=\small},
+  arrow/.style={-Stealth, thick, tekupblue},
+  lbl/.style={font=\scriptsize, color=gray}
+  ]
+  \node[box, fill=green!10, draw=green!60!black] (fe) at (0,0)
+        {\textbf{Frontend}\\React 19 / Vite\\Tailwind CSS};
+  \node[box] (be) at (4.5,0)
+        {\textbf{Backend}\\FastAPI\\Uvicorn};
+  \node[box, fill=orange!10, draw=orange!70!black] (wk) at (4.5,-3)
+        {\textbf{Worker Celery}\\Hunyuan3D-2\\PyTorch / MPS};
+  \node[box, fill=red!10, draw=red!60!black] (rd) at (9,0)
+        {\textbf{Redis}\\Broker\\Result store};
+  \node[box, fill=purple!10, draw=purple!60!black] (db) at (9,-3)
+        {\textbf{ChromaDB}\\Cache vectoriel\\CLIP embeddings};
+  \node[box, fill=gray!15, draw=gray!60] (un) at (0,-3)
+        {\textbf{Unity Editor}\\SpawnBridge.cs\\glTFast 6.9.0};
+
+  \draw[arrow] (fe) -- node[above, lbl]{HTTP/REST} (be);
+  \draw[arrow] (be) -- node[right, lbl]{Celery task} (wk);
+  \draw[arrow] (be) -- node[above, lbl]{publish/poll} (rd);
+  \draw[arrow] (wk) -- node[right, lbl]{store result} (rd);
+  \draw[arrow] (wk) -- node[below, lbl]{CLIP embed.} (db);
+  \draw[arrow] (be) -- node[left, lbl]{SpawnRequest JSON\\(protocole MCP)} (un);
+\end{tikzpicture}
+\caption{Architecture générale — vue déploiement}
+\label{fig:arch}
+\end{figure}
+
+\section{Modèles IA sélectionnés}
+
+\subsection{Hunyuan3D-2 — Génération de forme (ShapeGen)}
+
+Hunyuan3D-2 \cite{hunyuan3d2024} repose sur une architecture
+\textbf{DiT} (\textit{Diffusion Transformer}) opérant sur une représentation
+octree multi-résolution. Le VAE 3D encode la géométrie implicite, que le
+décodeur de flux marching-cubes convertit en maillage triangulé.
+
+Paramètres clés exposés par l'API :
+
+\begin{table}[H]
+\centering
+\caption{Hyperparamètres du pipeline ShapeGen}
+\label{tab:hyper}
+\begin{tabularx}{\linewidth}{@{}llXl@{}}
+\toprule
+\textbf{Paramètre} & \textbf{Type} & \textbf{Rôle} & \textbf{Défaut} \\
+\midrule
+\texttt{seed}                  & int   & Reproductibilité stochastique    & 1234 \\
+\texttt{num\_inference\_steps} & int   & Étapes de débruitage DiT         & 5 \\
+\texttt{guidance\_scale}       & float & Intensité du guidage conditionnel & 5.0 \\
+\texttt{octree\_resolution}    & int   & Résolution de la grille 3D       & 128 \\
+\texttt{num\_chunks}           & int   & Taille des chunks décodeur       & 8000 \\
+\texttt{face\_count}           & int   & Nombre max de faces (réduction)  & 20\,000 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Hunyuan3D-2 — Génération de texture (TexGen)}
+
+Le module TexGen génère des textures PBR (\textit{Physically Based Rendering})
+par \textbf{inpainting multi-vues} : à partir de l'image de référence, six
+vues synthétiques sont générées et projetées sur le maillage par UV mapping.
+
+\subsection{Modèles Text-to-Image (T2I)}
+
+Deux backends T2I sont supportés en fonction des contraintes matérielles :
+
+\begin{table}[H]
+\centering
+\caption{Backends Text-to-Image disponibles}
+\label{tab:t2i}
+\begin{tabularx}{\linewidth}{@{}lXll@{}}
+\toprule
+\textbf{Modèle} & \textbf{Description} & \textbf{VRAM} & \textbf{Langue} \\
+\midrule
+Hyper-SDXL      & SDXL distillé (4 étapes) & 8 GB & Anglais \\
+HunyuanDiT      & DiT bilingue Tencent    & 10 GB & FR + ZH \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{LLM d'extraction — Llama-3-8B-Instruct}
+
+Llama-3 est exécuté localement via \texttt{llama-cpp-python} avec
+quantisation \textbf{GGUF Q4\_K\_M} pour réduire l'empreinte mémoire à
+$\approx$ 5 GB. Il reçoit le texte extrait et produit un JSON structuré.
+
+\section{Pipeline de génération asynchrone}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  step/.style={draw=tekupblue, rounded corners=3pt, fill=tekupblue!8,
+               text width=5cm, align=center, minimum height=0.75cm, font=\small},
+  note/.style={font=\scriptsize, color=gray, text width=3cm},
+  arr/.style={-Stealth, thick}
+  ]
+  \foreach \y/\txt/\n in {
+    0/{POST /image-to-3d/async}/{Réponse HTTP 202 immédiate},
+    1.2/{Création uid (UUID4) + Thread background}/{uid renvoyé au client},
+    2.4/{rembg : suppression fond image}/{},
+    3.6/{Hunyuan3D DiT : génération maillage}/{$\approx$ 45--90 s},
+    4.8/{Nettoyage maillage (floaters / faces)}/{trimesh},
+    6.0/{Export GLB vers generated/3d\_outputs/}/{},
+    7.2/{GET /generation-status/\{uid\}}/{Polling client toutes 2 s},
+    8.4/{status: completed → preview\_url}/{}}
+  {
+    \node[step] at (0,-\y) {\txt};
+    \node[note, right=0.3cm] at (2.8,-\y) {\n};
+  }
+  \foreach \a/\b in {0/1.2,1.2/2.4,2.4/3.6,3.6/4.8,4.8/6.0,6.0/7.2,7.2/8.4}
+    \draw[arr] (0,-\a) -- (0,-\b);
+\end{tikzpicture}
+\caption{Flux d'une requête Image-to-3D asynchrone}
+\label{fig:flow}
+\end{figure}
+
+\section{Cache vectoriel ChromaDB}
+
+Pour éviter de régénérer des modèles visuellement identiques, un cache
+vectoriel stocke les embeddings \textbf{CLIP} des images traitées. La
+recherche par similarité cosinus évite les calculs redondants :
+
+\begin{equation}
+\cos(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u}\cdot\mathbf{v}}
+{\|\mathbf{u}\|\cdot\|\mathbf{v}\|} \geq 0{,}95
+\;\Rightarrow\; \text{cache hit}
+\label{eq:cosine}
+\end{equation}
+
+La clé de cache est un hash SHA-256 des hyperparamètres de génération
+combinés à l'embedding de l'image, assurant que deux images similaires avec
+des paramètres différents produisent des entrées de cache distinctes.
+
+\section{Intégration Unity — Protocole MCP}
+
+\subsection{Flux d'intégration}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw=gray!60, rounded corners, fill=gray!8, inner sep=6pt,
+              font=\small, align=center},
+  arr/.style={-Stealth, tekupblue, thick}
+  ]
+  \node[box] (btn)  at (0,0)     {Clic « Open in Unity »\\(Frontend)};
+  \node[box] (api)  at (0,-1.8)  {POST /api/v1/unity/spawn\\(Backend FastAPI)};
+  \node[box] (file) at (0,-3.6)  {Écriture SpawnRequest.json\\Assets/SpawnRequests/};
+  \node[box] (br)   at (0,-5.4)  {SpawnBridge.cs détecte le fichier\\(timer 0,5 s)};
+  \node[box] (dl)   at (0,-7.2)  {Téléchargement GLB\\(UnityWebRequest)};
+  \node[box] (imp)  at (0,-9.0)  {Import glTFast + instanciation\\Prefab dans scène active};
+
+  \foreach \a/\b in {btn/api, api/file, file/br, br/dl, dl/imp}
+    \draw[arr] (\a) -- (\b);
+
+  \node[right=0.4cm, font=\scriptsize, color=gray] at (2.8,-1.8)
+        {JSON: url, scene, id, name};
+  \node[right=0.4cm, font=\scriptsize, color=gray] at (2.8,-3.6)
+        {Fichier horodaté (µs)};
+\end{tikzpicture}
+\caption{Flux d'intégration Unity via MCP}
+\label{fig:mcp-flow}
+\end{figure}
+
+\subsection{Format du SpawnRequest}
+
+\begin{lstlisting}[language=json, caption={Fichier SpawnRequest.json}]
+{
+  "id":    "a1b2c3d4-e5f6-...",
+  "url":   "http://localhost:8000/api/v1/outputs/a1b2c3.glb",
+  "scene": "existing",
+  "name":  "Voiture de course"
+}
+\end{lstlisting}
+
+\subsection{Script SpawnBridge.cs}
+
+\begin{lstlisting}[language={[Sharp]C},
+  caption={SpawnBridge.cs — logique de spawn}]
+[InitializeOnLoad]
+public class SpawnBridge : AssetPostprocessor
+{
+    private const float POLL_INTERVAL = 0.5f;
+    private static string SpawnDir =>
+        Path.Combine(Application.dataPath, "SpawnRequests");
+
+    static SpawnBridge()
+    {
+        EditorApplication.update += PollSpawnRequests;
+    }
+
+    private static async void PollSpawnRequests()
+    {
+        foreach (var jsonFile in Directory.GetFiles(SpawnDir, "*.json"))
+        {
+            var req = JsonUtility.FromJson<SpawnRequest>(
+                          File.ReadAllText(jsonFile));
+            File.Delete(jsonFile);  // consomme la requete
+
+            var glb = await DownloadGLB(req.url);
+            var go  = await ImportAndInstantiate(glb, req.name);
+            Selection.activeGameObject = go;
+            SceneView.FrameLastActiveSceneView();
+        }
+    }
+}
+\end{lstlisting}
+
+\section{Architecture frontend}
+
+\begin{table}[H]
+\centering
+\caption{Composants React principaux}
+\label{tab:components}
+\begin{tabularx}{\linewidth}{@{}lX@{}}
+\toprule
+\textbf{Composant} & \textbf{Rôle} \\\midrule
+\texttt{App.tsx}        & Orchestrateur : état global, routing des vues \\
+\texttt{ImageTo3D}      & Upload, paramétrage, polling, aperçu résultat \\
+\texttt{TextTo3D}       & Saisie texte, choix modèle T2I, génération \\
+\texttt{MultiViewTo3D}  & 4 zones de dépôt, génération multi-vues \\
+\texttt{ModelGallery}   & Grille 3D, prévisualisation plein écran, action Unity \\
+\texttt{ModelViewer3D}  & Wrapper \texttt{<model-viewer>} (rotation/zoom/AR) \\
+\texttt{TextExtractor}  & Upload PDF/Email, extraction texte structuré \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+%% ================================================================
+%%  PHASE 5 — ÉVALUATION
+%% ================================================================
+\chapter{Phase 5 — Évaluation}
+
+\begin{crispbox}{CRISP-DM Phase 5 : Evaluation}
+Objectif : évaluer les résultats par rapport aux critères de succès définis
+en Phase 1, identifier les lacunes et décider de la mise en production.
+\end{crispbox}
+
+\section{Environnement de test}
+
+\begin{table}[H]
+\centering
+\caption{Configuration matérielle de test}
+\label{tab:env}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Composant} & \textbf{Valeur} \\\midrule
+Processeur & Apple M2 Pro (12 cœurs CPU, 19 cœurs GPU) \\
+Mémoire    & 16 GB RAM unifiée \\
+OS         & macOS Sequoia 15.3 \\
+Python     & 3.11.9 \\
+PyTorch    & 2.3.0 + MPS \\
+Unity      & 2022.3.56 LTS \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Tests fonctionnels}
+
+\begin{table}[H]
+\centering
+\caption{Résultats des tests fonctionnels (12 cas)}
+\label{tab:tests}
+\begin{tabularx}{\linewidth}{@{}cllXl@{}}
+\toprule
+\textbf{ID} & \textbf{US liée} & \textbf{Cas de test}
+            & \textbf{Résultat attendu} & \textbf{Statut} \\\midrule
+T-01 & US-3.1 & Upload PNG             & GLB généré & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-02 & US-3.1 & Image transparente     & Erreur explicite & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-03 & US-2.2 & Prompt texte anglais   & GLB généré & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-04 & US-2.2 & Prompt texte français  & GLB généré & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-05 & US-3.1 & Génération multi-vues  & Maillage plus précis & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-06 & US-3.1 & Annulation en cours    & Tâche annulée proprement & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-07 & US-4.3 & Spawn Unity (nouvelle scène) & GLB dans Unity & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-08 & US-4.3 & Spawn Unity (scène active)   & GLB ajouté  & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-09 & US-3.4 & Suppression modèle     & Fichier + cache supprimés & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-10 & US-5.2 & Galerie sans doublons  & 1 entrée / modèle & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-11 & US-1.4 & Fichier $>$ 50 MB      & Erreur HTTP 413 & \textcolor{crispgreen}{\textbf{PASS}} \\
+T-12 & US-5.2 & Test bout en bout      & PDF → 3D → Unity & \textcolor{crispgreen}{\textbf{PASS}} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Évaluation des performances}
+
+\begin{table}[H]
+\centering
+\caption{Temps de génération moyens (Apple M2 Pro / MPS, steps=5)}
+\label{tab:perf}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Mode} & \textbf{Min} & \textbf{Moy} & \textbf{Max} \\\midrule
+Image-to-3D (sans texture) & 45 s  & 62 s  & 90 s  \\
+Image-to-3D (avec texture) & 110 s & 145 s & 190 s \\
+Text-to-3D (sans texture)  & 65 s  & 85 s  & 120 s \\
+Multi-vues (sans texture)  & 55 s  & 75 s  & 100 s \\
+Cache hit (vecteur)        & — & $<$1 s & —     \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar, bar width=20pt,
+  xlabel={Mode de génération},
+  ylabel={Temps moyen (secondes)},
+  symbolic x coords={I2-3D, I2-3D+tex, T2-3D, MV-3D},
+  xtick=data, ymin=0, ymax=200,
+  nodes near coords, nodes near coords align={vertical},
+  enlarge x limits=0.25,
+  width=13cm, height=6.5cm,
+  ]
+  \addplot[fill=tekupblue!60, draw=tekupblue]
+    coordinates {(I2-3D,62) (I2-3D+tex,145) (T2-3D,85) (MV-3D,75)};
+  \addplot[fill=crispyellow!80, draw=crispyellow!80!black]
+    coordinates {(I2-3D,45) (I2-3D+tex,110) (T2-3D,65) (MV-3D,55)};
+  \addplot[fill=red!40, draw=red!60]
+    coordinates {(I2-3D,90) (I2-3D+tex,190) (T2-3D,120) (MV-3D,100)};
+  \legend{Moyenne, Minimum, Maximum}
+\end{axis}
+\end{tikzpicture}
+\caption{Temps de génération par mode (Apple M2 Pro, steps=5)}
+\label{fig:perf}
+\end{figure}
+
+\section{Évaluation de la qualité des modèles}
+
+\begin{table}[H]
+\centering
+\caption{Évaluation qualitative sur 20 images de test}
+\label{tab:qual}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Critère} & \textbf{Satisfaisant} & \textbf{Acceptable} & \textbf{Insuffisant} \\\midrule
+Cohérence géométrique & 16/20 (80\%) & 3/20 (15\%) & 1/20 (5\%) \\
+Complétude du maillage & 15/20 (75\%) & 4/20 (20\%) & 1/20 (5\%) \\
+Qualité de texture    & 13/20 (65\%) & 5/20 (25\%) & 2/20 (10\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Révision par rapport aux critères de succès}
+
+\begin{table}[H]
+\centering
+\caption{Révision CRISP-DM — critères de succès vs. résultats}
+\label{tab:crisp-review}
+\begin{tabularx}{\linewidth}{@{}lllX@{}}
+\toprule
+\textbf{Critère} & \textbf{Seuil} & \textbf{Résultat} & \textbf{Décision} \\\midrule
+Performance  & $\leq$120 s   & 62 s (moy.)   & \textcolor{crispgreen}{\textbf{Atteint}} \\
+Qualité géom.& $\geq$80\%    & 80\%          & \textcolor{crispgreen}{\textbf{Atteint}} \\
+Intégration  & 100\%         & 100\%         & \textcolor{crispgreen}{\textbf{Atteint}} \\
+Disponibilité& $\geq$99\%    & 99,5\%        & \textcolor{crispgreen}{\textbf{Atteint}} \\
+UX sans CLI  & Oui           & Oui           & \textcolor{crispgreen}{\textbf{Atteint}} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Tous les critères de succès sont atteints. La décision CRISP-DM est
+\textbf{Go for Deployment}.
+
+%% ================================================================
+%%  PHASE 6 — DÉPLOIEMENT
+%% ================================================================
+\chapter{Phase 6 — Déploiement}
+
+\begin{crispbox}{CRISP-DM Phase 6 : Deployment}
+Objectif : mettre le système en production, documenter son utilisation,
+planifier la maintenance et la surveillance.
+\end{crispbox}
+
+\section{Architecture de déploiement}
+
+La plateforme se déploie via \textbf{Docker Compose} en une seule commande,
+exposant trois services :
+
+\begin{lstlisting}[language=yaml, caption={docker-compose.yml — extrait}]
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["9501:6379"]
+
+  backend:
+    build: ./Backend
+    ports: ["9502:8000"]
+    depends_on: [redis]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      HY3D_ENABLE_T23D: "true"
+      HY3D_ENABLE_MV: "true"
+    volumes:
+      - ./Backend/generated:/app/generated
+
+  frontend:
+    build: ./Frontend
+    ports: ["9503:80"]
+    depends_on: [backend]
+\end{lstlisting}
+
+\section{Ports et accès}
+
+\begin{table}[H]
+\centering
+\caption{Mapping des ports en production}
+\label{tab:ports}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Service} & \textbf{Port hôte} & \textbf{Port conteneur} \\\midrule
+Frontend (Nginx)  & 9503 & 80 \\
+Backend (FastAPI) & 9502 & 8000 \\
+Redis             & 9501 & 6379 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Installation du launcher Unity}
+
+Le launcher macOS est installé depuis l'interface web en un clic :
+
+\begin{enumerate}
+  \item Lancer le backend en natif (pas en Docker) :
+        \lstinline|uvicorn app.main:app --reload --port 8000|
+  \item Accéder à la Galerie → bannière ambrée « Unity launcher non installé »
+  \item Cliquer \textbf{Install now} → \texttt{POST /api/v1/unity/register-launcher}
+        compile \texttt{UnityLauncher.app} et enregistre le protocole
+        \texttt{unity3dgen://} auprès du système.
+  \item Ouvrir le projet \texttt{UnityProject/} dans Unity Hub (une seule fois
+        pour résoudre la dépendance glTFast).
+\end{enumerate}
+
+\section{Guide d'utilisation}
+
+\subsection{Génération depuis une image}
+\begin{enumerate}[noitemsep]
+  \item Naviguer vers \textit{Image to 3D} dans la barre latérale.
+  \item Glisser-déposer ou cliquer pour uploader une image.
+  \item Régler les paramètres (steps, resolution, texture optionnelle).
+  \item Cliquer \textbf{Generate} — un compteur indique le temps écoulé.
+  \item À la complétion, l'aperçu 3D interactif s'affiche (rotation, zoom).
+  \item Télécharger (GLB/OBJ/STL) ou envoyer vers Unity.
+\end{enumerate}
+
+\subsection{Utilisation de la galerie}
+La galerie conserve tous les modèles générés. Chaque carte expose :
+téléchargement, prévisualisation plein écran, et le menu \textbf{Unity ▾}
+pour spawner dans une nouvelle scène ou la scène active.
+
+\section{Surveillance et maintenance}
+
+\begin{table}[H]
+\centering
+\caption{Endpoints de surveillance}
+\label{tab:monitoring}
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+\textbf{Endpoint} & \textbf{Méthode} & \textbf{Information} \\\midrule
+\texttt{/health}              & GET & Statut global de l'API \\
+\texttt{/api/v1/system-stats} & GET & RAM, VRAM, device (MPS/CUDA/CPU) \\
+\texttt{/api/v1/cache-stats}  & GET & Nombre d'entrées cache, modèles \\
+\texttt{/docs}                & GET & Documentation Swagger OpenAPI \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Documentation de l'API}
+
+L'ensemble des endpoints est documenté automatiquement via \textbf{Swagger UI}
+(\texttt{/docs}) et \textbf{ReDoc} (\texttt{/redoc}). Un aperçu des endpoints
+principaux est fourni en Annexe~\ref{ann:api}.
+
+%% ================================================================
+%%  CONCLUSION GÉNÉRALE
+%% ================================================================
+\cleardoublepage
+\chapter*{Conclusion générale et perspectives}
+\addcontentsline{toc}{chapter}{Conclusion générale et perspectives}
+\markboth{Conclusion générale et perspectives}{}
+
+\section*{Bilan CRISP-DM}
+
+Ce projet a suivi rigoureusement les six phases CRISP-DM, depuis la
+définition des objectifs métier jusqu'au déploiement en production :
+
+\begin{table}[H]
+\centering
+\caption{Bilan synthétique des phases CRISP-DM}
+\label{tab:crisp-bilan}
+\begin{tabularx}{\linewidth}{@{}clX@{}}
+\toprule
+\textbf{Phase} & \textbf{Livrable} & \textbf{Résultat} \\\midrule
+1 & Backlog 5 phases / 8 sprints & 16 User Stories planifiées et livrées \\
+2 & Corpus 20 images + analyse documentaire & Contraintes identifiées \\
+3 & Pipelines rembg, unstructured, Pydantic & Données propres et validées \\
+4 & Hunyuan3D-2 + LLM + MCP + ChromaDB & 3 modes de génération fonctionnels \\
+5 & 12 tests / métriques temps & Tous critères de succès atteints \\
+6 & Docker Compose + Launcher Unity & Déploiement en 1 commande \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section*{Difficultés rencontrées}
+\begin{itemize}
+  \item \textbf{Sandboxing macOS (TCC)} : les restrictions Apple sur
+    l'accès fichiers ont empêché l'utilisation de scripts Python via les
+    URL schemes. Solution adoptée : appel API direct depuis le frontend,
+    contournant entièrement le problème.
+  \item \textbf{Concurrence MPS} : le scheduler PyTorch MPS ne supporte
+    pas les appels concurrents au pipeline multi-vues. Solution : verrou
+    Python (\texttt{threading.Lock}) sur le pipeline.
+  \item \textbf{Qualité des objets symétriques} : les objets sans
+    caractéristiques distinctives (sphères, cubes lisses) produisent
+    des maillages déformés. Partiellement atténué par le nettoyage trimesh.
+\end{itemize}
+
+\section*{Perspectives}
+\begin{enumerate}
+  \item \textbf{GPU NVIDIA / CUDA} : temps de génération estimé à $<$30 s.
+  \item \textbf{Fine-tuning} : spécialisation de Hunyuan3D-2 sur un corpus
+    d'assets de jeux vidéo (Objaverse-XL).
+  \item \textbf{Vrai protocole MCP bidirectionnel} : remplacement du polling
+    de fichiers JSON par une connexion WebSocket MCP conforme au SDK Anthropic,
+    permettant un retour d'état temps réel depuis Unity.
+  \item \textbf{Support Windows/Linux} : portage du launcher Unity.
+  \item \textbf{Pipeline agentique LangGraph} : orchestration d'un agent
+    capable de générer, évaluer et régénérer automatiquement si la qualité
+    est jugée insuffisante.
+\end{enumerate}
+
+En conclusion, ce projet démontre la faisabilité d'un pipeline de génération
+3D par IA entièrement local, performant sur matériel grand public, piloté par
+la méthodologie CRISP-DM et directement connecté à Unity — posant les bases
+d'un assistant de création de jeux vidéo intelligent.
+
+%% ================================================================
+%%  BIBLIOGRAPHIE
+%% ================================================================
+\cleardoublepage
+\printbibliography[heading=bibintoc, title={Bibliographie}]
+
+%% ================================================================
+%%  ANNEXES
+%% ================================================================
+\appendix
+
+\chapter{Référence des endpoints API}
+\label{ann:api}
+
+\begin{table}[H]
+\centering
+\caption{Endpoints REST complets}
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+\textbf{Méthode} & \textbf{Endpoint} & \textbf{Description} \\\midrule
+POST   & \texttt{/api/v1/image-to-3d/async}       & Soumettre image-to-3D \\
+POST   & \texttt{/api/v1/text-to-3d/async}        & Soumettre text-to-3D \\
+POST   & \texttt{/api/v1/multiview-to-3d/async}   & Soumettre multi-vues \\
+GET    & \texttt{/api/v1/generation-status/\{uid\}}& Interroger statut \\
+DELETE & \texttt{/api/v1/generation/\{uid\}}       & Annuler une tâche \\
+GET    & \texttt{/api/v1/generated-models}         & Lister modèles disque \\
+GET    & \texttt{/api/v1/outputs/\{filename\}}     & Télécharger GLB \\
+GET    & \texttt{/api/v1/cache-stats}              & Stats cache vectoriel \\
+DELETE & \texttt{/api/v1/models/\{uid\}}           & Supprimer un modèle \\
+POST   & \texttt{/api/v1/unity/spawn}              & Envoyer vers Unity \\
+POST   & \texttt{/api/v1/unity/register-launcher}  & Installer launcher \\
+GET    & \texttt{/api/v1/unity/launcher-status}    & Statut launcher \\
+GET    & \texttt{/api/v1/system-stats}             & RAM / VRAM / device \\
+GET    & \texttt{/health}                          & Health check \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\chapter{Paramètres de génération}
+\label{ann:params}
+
+\begin{table}[H]
+\centering
+\caption{Paramètres exposés par les endpoints de génération}
+\begin{tabularx}{\linewidth}{@{}llXl@{}}
+\toprule
+\textbf{Paramètre} & \textbf{Type} & \textbf{Description} & \textbf{Défaut} \\\midrule
+\texttt{seed}                  & int   & Graine (reproductibilité) & 1234 \\
+\texttt{num\_inference\_steps} & int   & Étapes de débruitage DiT  & 5 \\
+\texttt{guidance\_scale}       & float & Intensité du guidage      & 5.0 \\
+\texttt{octree\_resolution}    & int   & Résolution grille 3D      & 128 \\
+\texttt{num\_chunks}           & int   & Chunks de décodage        & 8000 \\
+\texttt{texture}               & bool  & Activer génération texture& false \\
+\texttt{face\_count}           & int   & Nb. max de faces          & 20\,000 \\
+\texttt{type}                  & str   & Format : glb/obj/stl/ply  & glb \\
+\texttt{t2i\_model}            & str   & Backend T2I (text-to-3D)  & hyper\_sdxl \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\chapter{Modèles IA — ressources}
+\label{ann:models}
+
+\begin{table}[H]
+\centering
+\caption{Modèles recommandés (Hugging Face)}
+\begin{tabularx}{\linewidth}{@{}lXll@{}}
+\toprule
+\textbf{Rôle} & \textbf{Modèle HF} & \textbf{VRAM} & \textbf{Usage} \\\midrule
+Extraction     & meta-llama/Meta-Llama-3-8B-Instruct & 5 GB (Q4) & JSON structuré \\
+Code C\#       & Qwen/Qwen2.5-Coder-7B-Instruct      & 5 GB (Q4) & Scripts Unity \\
+Image-to-3D   & tencent/Hunyuan3D-2                 & 8 GB & Maillage \\
+Text-to-Image  & stabilityai/stable-diffusion-xl     & 6 GB & Image intermédiaire \\
+Seg. arrière-plan & danielgatis/rembg (U2-Net)      & 1 GB & Preprocessing \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\end{document}

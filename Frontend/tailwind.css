@@ -1,60 +1,79 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
+/* ── Theme tokens (CSS variables) ─────────────────────────────── */
 :root,
 .light {
-  /* Light theme (default) */
   --bg-primary: #ffffff;
   --bg-secondary: #f8fafc;
   --bg-tertiary: #f1f5f9;
   --bg-card: #ffffff;
   --bg-input: #f1f5f9;
   --bg-hover: #e2e8f0;
-  
+
   --text-primary: #0f172a;
   --text-secondary: #334155;
   --text-tertiary: #64748b;
   --text-muted: #94a3b8;
-  
+
   --border-primary: #e2e8f0;
   --border-secondary: #cbd5e1;
   --border-focus: #FF8C66;
-  
+
   --accent-primary: #FF8C66;
   --accent-secondary: #7C3AED;
-  
+
   --status-online: #10b981;
   --status-offline: #ef4444;
   --status-busy: #f59e0b;
 }
 
 .dark {
-  /* Dark theme */
   --bg-primary: #020408;
   --bg-secondary: #0A0A0A;
   --bg-tertiary: #050505;
   --bg-card: #0A0A0A;
   --bg-input: #27272a;
   --bg-hover: #3f3f46;
-  
+
   --text-primary: #f8fafc;
   --text-secondary: #e2e8f0;
   --text-tertiary: #94a3b8;
   --text-muted: #64748b;
-  
+
   --border-primary: #27272a;
   --border-secondary: #3f3f46;
   --border-focus: #FF8C66;
-  
+
   --accent-primary: #FF8C66;
   --accent-secondary: #7C3AED;
-  
+
   --status-online: #10b981;
   --status-offline: #ef4444;
   --status-busy: #f59e0b;
 }
 
+/* ── Tailwind v4 theme extension ──────────────────────────────── */
+@theme {
+  --color-surface-primary: var(--bg-primary);
+  --color-surface-secondary: var(--bg-secondary);
+  --color-surface-tertiary: var(--bg-tertiary);
+  --color-surface-card: var(--bg-card);
+  --color-surface-input: var(--bg-input);
+  --color-surface-hover: var(--bg-hover);
+
+  --color-content-primary: var(--text-primary);
+  --color-content-secondary: var(--text-secondary);
+  --color-content-tertiary: var(--text-tertiary);
+  --color-content-muted: var(--text-muted);
+
+  --color-edge-primary: var(--border-primary);
+  --color-edge-secondary: var(--border-secondary);
+
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-secondary: var(--accent-secondary);
+}
+
+/* ── Base ─────────────────────────────────────────────────────── */
 @layer base {
   body {
     background-color: var(--bg-primary);
@@ -63,29 +82,27 @@
   }
 }
 
+/* ── Component helpers ────────────────────────────────────────── */
 @layer components {
-  /* Card component */
   .card {
     background-color: var(--bg-card);
     border: 1px solid var(--border-primary);
     border-radius: 1rem;
     transition: background-color 0.3s ease, border-color 0.3s ease;
   }
-  
-  /* Input component */
+
   .input-container {
     background-color: var(--bg-input);
     border: 1px solid var(--border-secondary);
     border-radius: 0.75rem;
     transition: all 0.2s ease;
   }
-  
+
   .input-container:focus-within {
     border-color: var(--border-focus);
     box-shadow: 0 0 0 1px var(--border-focus);
   }
-  
-  /* Button variants */
+
   .btn-primary {
     background: linear-gradient(to right, var(--accent-primary), #FF5F6D);
     color: white;
@@ -93,12 +110,12 @@
     font-weight: 600;
     transition: all 0.2s ease;
   }
-  
+
   .btn-primary:hover {
     opacity: 0.9;
     transform: translateY(-1px);
   }
-  
+
   .btn-secondary {
     background-color: var(--bg-tertiary);
     color: var(--text-primary);
@@ -106,118 +123,92 @@
     border-radius: 0.5rem;
     transition: all 0.2s ease;
   }
-  
+
   .btn-secondary:hover {
     background-color: var(--bg-hover);
   }
-  
-  /* Sidebar */
+
   .sidebar {
     background-color: var(--bg-secondary);
     border-right: 1px solid var(--border-primary);
   }
-  
+
   .sidebar-item {
     color: var(--text-tertiary);
     border-radius: 0.75rem;
     transition: all 0.2s ease;
   }
-  
+
   .sidebar-item:hover {
     background-color: var(--bg-hover);
     color: var(--text-secondary);
   }
-  
+
   .sidebar-item.active {
     background: linear-gradient(to right, var(--accent-primary), #FF5F6D);
     color: white;
   }
-  
-  /* Status badges */
+
   .status-badge {
     background-color: var(--bg-tertiary);
     border: 1px solid var(--border-secondary);
     border-radius: 0.5rem;
     padding: 0.5rem 1rem;
   }
-  
-  /* Terminal/Logs */
+
   .terminal {
     background-color: var(--bg-secondary);
     border: 1px solid var(--border-primary);
     border-radius: 1rem;
   }
-  
-  /* Drag and drop zone */
+
   .dropzone {
     border: 2px dashed var(--border-secondary);
     background-color: var(--bg-input);
     border-radius: 0.75rem;
     transition: all 0.2s ease;
   }
-  
+
   .dropzone.drag-active {
     border-color: var(--accent-secondary);
     background-color: rgba(124, 58, 237, 0.1);
   }
-  
+
   .dropzone:hover {
     background-color: var(--bg-hover);
   }
-  
-  /* Toggle cards */
+
   .toggle-card {
     background-color: var(--bg-input);
     border: 1px solid var(--border-primary);
     border-radius: 0.75rem;
     padding: 1rem;
   }
-  
-  /* Text colors */
-  .text-heading {
-    color: var(--text-primary) !important;
-  }
-  
-  .text-body {
-    color: var(--text-secondary) !important;
-  }
-  
-  .text-muted {
-    color: var(--text-tertiary) !important;
-  }
+
+  .text-heading { color: var(--text-primary) !important; }
+  .text-body    { color: var(--text-secondary) !important; }
+  .text-muted   { color: var(--text-tertiary) !important; }
 }
 
+/* ── Utility aliases ──────────────────────────────────────────── */
 @layer utilities {
-  /* Background surfaces */
-  .bg-theme-primary {
-    background-color: var(--bg-primary);
-  }
-  .bg-theme-secondary {
-    background-color: var(--bg-secondary);
-  }
-  .bg-theme-card {
-    background-color: var(--bg-card);
-  }
-  .bg-theme-input {
-    background-color: var(--bg-input);
-  }
+  .bg-theme-primary   { background-color: var(--bg-primary); }
+  .bg-theme-secondary { background-color: var(--bg-secondary); }
+  .bg-theme-card      { background-color: var(--bg-card); }
+  .bg-theme-input     { background-color: var(--bg-input); }
 
-  /* Text colors — use these instead of text-zinc-* */
-  .text-theme-primary {
-    color: var(--text-primary) !important;
-  }
-  .text-theme-secondary {
-    color: var(--text-secondary) !important;
-  }
-  .text-theme-muted {
-    color: var(--text-tertiary) !important;
-  }
+  .text-theme-primary   { color: var(--text-primary) !important; }
+  .text-theme-secondary { color: var(--text-secondary) !important; }
+  .text-theme-muted     { color: var(--text-tertiary) !important; }
 
-  /* Border colors */
-  .border-theme {
-    border-color: var(--border-primary);
-  }
-  .border-theme-secondary {
-    border-color: var(--border-secondary);
-  }
+  .border-theme           { border-color: var(--border-primary); }
+  .border-theme-secondary { border-color: var(--border-secondary); }
+
+  .bg-primary   { background-color: var(--bg-primary); }
+  .bg-secondary { background-color: var(--bg-secondary); }
+  .bg-tertiary  { background-color: var(--bg-tertiary); }
+  .text-primary { color: var(--text-primary); }
+  .text-secondary { color: var(--text-secondary); }
+  .text-tertiary  { color: var(--text-tertiary); }
+  .border-color   { border-color: var(--border-color); }
 }

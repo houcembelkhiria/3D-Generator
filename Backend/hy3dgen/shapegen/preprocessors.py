@@ -57,7 +57,9 @@ class ImageProcessorV2:
         size = max(H, W)
         result = np.zeros((size, size, C), dtype=np.uint8)
 
-        coords = np.nonzero(mask)
+        coords = np.nonzero(mask > 10)  # ignore near-transparent rembg artifact pixels
+        if coords[0].size == 0:
+            coords = np.nonzero(mask)
         x_min, x_max = coords[0].min(), coords[0].max()
         y_min, y_max = coords[1].min(), coords[1].max()
         h = x_max - x_min

@@ -398,3 +398,22 @@ async def multiview_to_3d_async(body: MultiViewTo3DRequest):
 
     threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
+
+
+@router.delete("/models/{uid}", summary="Delete a generated model file from disk")
+async def delete_model(uid: str):
+    import re
+    if not re.fullmatch(r'[a-zA-Z0-9_\-]+', uid):
+        raise HTTPException(status_code=400, detail="Invalid model id")
+    output_dir = Path("generated/3d_outputs")
+    glb_path = output_dir / f"{uid}.glb"
+    if not glb_path.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+    glb_path.unlink()
+    # Best-effort: also remove from vector cache
+    if _vector_store is not None:
+        try:
+            _vector_store.delete(uid)
+        except Exception:
+            pass
+    return {"deleted": True, "uid": uid}

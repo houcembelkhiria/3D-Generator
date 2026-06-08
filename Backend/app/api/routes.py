@@ -698,3 +698,56 @@ def clean_extracted_text(text: str) -> str:
     """
     return clean_document_text(text)
 
+
+
+# ============================================================================
+# LangGraph Pipeline Endpoint
+# ============================================================================
+
+class PipelineRunResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+
+
+@router.post(
+    "/run-pipeline",
+    response_model=PipelineRunResponse,
+    tags=["LangGraph Pipeline"],
+    summary="Run LangGraph 3D generation pipeline",
+    description="""
+    Upload a document and run the full LangGraph pipeline:
+    parse → LLM spec extraction (with retry) → 3D mesh generation (with retry) → result.
+
+    Uses the same task polling endpoint (`/task/{task_id}`) to check progress.
+    """,
+)
+async def run_pipeline(
+    file: UploadFile = File(..., description="PDF or EML document"),
+):
+    allowed_types = ["application/pdf", "message/rfc822"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF and Email files are supported",
+        )
+
+    file_id = str(uuid.uuid4())
+    file_extension = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    file_path = os.path.join(settings.UPLOAD_DIR, f"{file_id}.{file_extension}")
+
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    celery_app.send_task(
+        "app.tasks.run_pipeline",
+        args=[file_path, file.content_type],
+        task_id=file_id,
+    )
+
+    return PipelineRunResponse(
+        task_id=file_id,
+        status="processing",
+        message="LangGraph pipeline started. Poll /task/{task_id} for status.",
+    )

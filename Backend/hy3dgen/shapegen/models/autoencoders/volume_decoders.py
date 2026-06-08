@@ -415,6 +415,11 @@ class FlashVDMVolumeDecoding:
             nidx = torch.where(next_index > 0)
 
             next_points = torch.stack(nidx, dim=1)
+
+            # No near-surface voxels found — fall back to coarser grid_logits
+            if next_points.shape[0] == 0:
+                break
+
             next_points = (next_points * torch.tensor(resolution, dtype=torch.float32, device=device) +
                            torch.tensor(bbox_min, dtype=torch.float32, device=device))
 

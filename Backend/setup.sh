@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== 3D Generator Backend Setup ==="
+echo "=== 3D Generator Backend v2 Setup ==="
 
 # Detect Python
 PYTHON=""
@@ -44,4 +44,4 @@ echo ""
 echo "=== Setup complete! ==="
 echo "To start the server:"
 echo "  source venv/bin/activate"
-echo "  uvicorn app.main:app --host 0.0.0.0 --port 8000"
+echo "  uvicorn app.main:app --host 0.0.0.0 --port 8001"

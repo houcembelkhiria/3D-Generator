@@ -19,9 +19,6 @@ class Hunyuan3DTexGenConfig:
         self.device = device
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
-        # 6 views matching working fork (Hunyuan3D-2GP). Top/bottom carry low
-        # weight (0.05 each) but close coverage gaps so the back doesn't depend
-        # entirely on inpainting from front-view colours.
         self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
         self.candidate_camera_elevs = [0, 0, 0, 0, 90, -90]
         self.candidate_view_weights = [1, 0.1, 0.5, 0.1, 0.05, 0.05]
@@ -128,7 +125,7 @@ class Hunyuan3DPaintPipeline:
 
     # Maps texgen camera azimuth (elev=0) → user view name.
     # Front is already the primary `image` input so we only substitute the others.
-    _AZIM_TO_VIEW = {90: 'right', 180: 'back', 270: 'left'}
+    _AZIM_TO_VIEW = {0: 'front', 90: 'right', 180: 'back', 270: 'left'}
 
     @torch.inference_mode()
     def __call__(self, mesh, image, user_views=None):
@@ -187,6 +184,14 @@ class Hunyuan3DPaintPipeline:
         for i in range(len(multiviews)):
             multiviews[i] = multiviews[i].resize((self.config.render_size, self.config.render_size))
 
+        # In multiview mode: replace AI top/bottom views with neutral silver-gray so the
+        # case rim gets a plausible metal colour instead of AI-hallucinated brown.
+        if user_views:
+            _neutral = Image.new('RGB', (self.config.render_size, self.config.render_size), (205, 205, 200))
+            for _i, _elev in enumerate(selected_camera_elevs):
+                if _elev != 0:
+                    multiviews[_i] = _neutral
+
         # Substitute user-provided views where available (back/left/right).
         # This replaces AI-hallucinated texture with the user's actual images,
         # which matters most for the back (weight=0.5) and sides (weight=0.1).
@@ -197,11 +202,24 @@ class Hunyuan3DPaintPipeline:
                 view_name = self._AZIM_TO_VIEW.get(azim)
                 if view_name and view_name in user_views:
                     try:
-                        user_img = self.recenter_image(user_views[view_name])
-                        user_img = user_img.convert('RGB').resize(
+                        user_img = self.recenter_image(user_views[view_name], border_ratio=0.02)
+                        # Composite RGBA over white — transparent areas must be white,
+                        # not black (PIL default for RGBA->RGB).
+                        if user_img.mode == 'RGBA':
+                            _bg = Image.new('RGB', user_img.size, (255, 255, 255))
+                            _bg.paste(user_img, mask=user_img.split()[3])
+                            user_img = _bg
+                        else:
+                            user_img = user_img.convert('RGB')
+                        user_img = user_img.resize(
                             (self.config.render_size, self.config.render_size))
                         multiviews[i] = user_img
                         trace(f"Substituted {view_name} view (azim={azim}°) with user image")
+                        # DEBUG: save processed user image
+                        try:
+                            user_img.save(os.path.join(_dbg, f'user_view_{view_name}.png'))
+                        except Exception:
+                            pass
                     except Exception as _e:
                         trace(f"Warning: could not substitute {view_name} view: {_e}")
 
