@@ -35,6 +35,7 @@ frontend: Frontend/node_modules
 dev: Backend/venv Frontend/node_modules
 	@trap 'kill 0' EXIT; \
 	(cd Backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000) & \
+	(cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002) & \
 	(cd Frontend && npm run dev) & \
 	wait
 
@@ -111,6 +112,7 @@ mcp-stdio: Backend/venv
 dev-mcp: Backend/venv Frontend/node_modules
 	@trap 'kill 0' EXIT; \
 	(cd Backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000) & \
+	(cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002) & \
 	(cd Backend && source venv/bin/activate && python -m app.mcp_server --sse --port 8002) & \
 	(cd Frontend && npm run dev) & \
 	wait
