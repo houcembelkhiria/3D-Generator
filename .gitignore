@@ -55,3 +55,7 @@ mesh_processor.cpp
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+
+# Parallel dev trees (not part of main branch)
+Backend-v2/
+Frontend-v2/
