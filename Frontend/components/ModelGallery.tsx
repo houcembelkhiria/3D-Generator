@@ -92,6 +92,7 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
   const [unityMenuFor, setUnityMenuFor] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [status, setStatus] = useState<LauncherStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
@@ -330,8 +331,9 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
                     </a>
                     {onRemove && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); onRemove(model.id); }}
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(model.id); }}
                         className="p-1 text-theme-muted hover:text-red-400 transition-colors"
+                        title="Delete model"
                       >
                         <IconTrash className="w-3.5 h-3.5" />
                       </button>
@@ -410,6 +412,57 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
           </div>
         </div>
       )}
+
+      {/* Delete confirmation dialog */}
+      {confirmDeleteId && onRemove && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setConfirmDeleteId(null)}
+        >
+          <div
+            className="bg-[var(--bg-card)] rounded-2xl border border-theme shadow-2xl w-full max-w-sm mx-4 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 rounded-full bg-red-500/20">
+                  <IconTrash className="w-5 h-5 text-red-400" />
+                </div>
+                <h3 className="text-base font-semibold text-heading">Delete model?</h3>
+              </div>
+              {(() => {
+                const m = models.find(m => m.id === confirmDeleteId);
+                return m?.prompt ? (
+                  <p className="text-sm text-theme-muted mb-4 truncate">"{m.prompt}"</p>
+                ) : (
+                  <p className="text-sm text-theme-muted mb-4">This action cannot be undone.</p>
+                );
+              })()}
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteId(null)}
+                  className="flex-1 px-4 py-2 rounded-xl border border-theme text-theme-secondary hover:text-theme-primary hover:border-[var(--border-secondary)] transition-all text-sm font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRemove(confirmDeleteId);
+                    setConfirmDeleteId(null);
+                    if (selectedModel?.id === confirmDeleteId) setSelectedModel(null);
+                  }}
+                  className="flex-1 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white transition-all text-sm font-semibold"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
 
     </div>
   );
