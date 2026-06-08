@@ -872,3 +872,757 @@ curl http://localhost:8001/api/v1/cache-stats
 ---
 
 **Bonne soutenance !**
+
+---
+---
+
+# PARTIE II — Questions complémentaires & approfondissements
+
+## 19. Patterns d'architecture & design decisions
+
+### Q19.1 Quels design patterns avez-vous utilisés ?
+**R :**
+- **Singleton** : `get_hunyuan3d()` retourne toujours la même instance du service (modèle ML chargé une fois)
+- **Strategy** : `Hunyuan3DPaintPipeline.merge_method = 'fast'` (vs 'graphcut') — plug d'algorithme de bake
+- **Factory** : `build_pipeline(interrupt_after=...)` retourne un graphe compilé selon les options
+- **Observer/Callback** : `on_event(node_name, state)` callback dans `run_pipeline_streaming`
+- **State Machine** : LangGraph est intrinsèquement un state machine pattern
+- **Repository** : `gallery_db` (et le futur `pipeline_stats_db`) encapsulent l'accès SQLite
+- **Adapter** : `tasks_3d.py` adapte l'interface synchrone Hunyuan vers l'interface async Celery
+- **Context Manager** : `_node_timeout(seconds, label)` est un context manager pour les timeouts
+
+### Q19.2 Avez-vous appliqué les principes SOLID ?
+**R :**
+- **S** (Single Responsibility) : chaque module a une responsabilité claire (`worker.py` = config Celery, `gallery_db.py` = persistance, `tasks_3d.py` = tâches GPU)
+- **O** (Open/Closed) : `_AZIM_TO_VIEW` dict permet d'ajouter de nouvelles vues sans modifier le code de substitution
+- **L** (Liskov) : peu de héritage dans le projet
+- **I** (Interface Segregation) : Pydantic models par endpoint (`ImageTo3DRequest` ≠ `TextTo3DRequest`)
+- **D** (Dependency Inversion) : services injectés via `get_*()` lazy, pas instanciés en module-top
+
+### Q19.3 Comment gérez-vous les imports circulaires ?
+**R :** Imports différés (lazy) à l'intérieur des fonctions plutôt qu'au top du module. Exemple dans `nodes.py` :
+```python
+def extract_spec_llm_node(state):
+    from app.services.llm_service import get_llm_service  # lazy
+    ...
+```
+Évite que l'import de `nodes.py` charge tout l'arbre de services au démarrage.
+
+### Q19.4 Comment isolez-vous les couches ?
+**R :** Architecture en 4 couches :
+1. **API** (`app/api/`) — uniquement routes FastAPI, pas de logique métier
+2. **Pipeline** (`app/pipeline/`) — orchestration LangGraph, pas d'accès direct aux services lourds (lazy import)
+3. **Services** (`app/services/`) — logique métier (LLM, hunyuan, document parser, vector store)
+4. **Models** (`app/models/`) — Pydantic models pour le typage
+
+Les routes ne devraient jamais importer directement Hunyuan ; elles passent par les services (ou Celery tasks).
+
+### Q19.5 Pourquoi tasks.py et tasks_3d.py séparés ?
+**R :** Séparation des préoccupations :
+- `tasks.py` : workflow LangGraph (pipeline document→3D)
+- `tasks_3d.py` : tâches GPU directes (4 modes)
+
+Aurait pu être dans le même fichier, mais 100+ LOC chacun = mieux séparés. Le `task_routes` Celery les inclut tous deux.
+
+### Q19.6 Comment communiquez-vous entre workers Celery ?
+**R :** Pas de communication directe entre workers. Chaque tâche est indépendante. Si une tâche A doit déclencher B, soit :
+- A retourne, B est enqueue séparément (chaining via Celery `chord` ou `chain`)
+- A appelle `celery_app.send_task("B", ...)` directement
+- A et B partagent un état via Redis/SQLite
+
+Dans notre cas, le pipeline LangGraph est une seule tâche Celery (`run_pipeline`) qui orchestre les sous-étapes en-process via LangGraph.
+
+### Q19.7 Pourquoi pas une seule classe `Generator` avec une méthode `generate(mode)` ?
+**R :** Considéré et rejeté. Les 4 modes ont des signatures différentes (image, text, views dict, source uid), des validations différentes, des dépendances de pipelines différentes (i23d_pipeline vs mv_pipeline). Une méthode unique avec `**kwargs` perdrait le typage et les validations. Les méthodes séparées dans `Hunyuan3DService` sont plus claires et autodocumentées.
+
+### Q19.8 Comment ajouteriez-vous un 5e mode (ex : video-to-3D) ?
+**R :**
+1. Nouvelle méthode `Hunyuan3DService.video_to_3d(video_b64, ...)` (qui appellerait un nouveau pipeline ML)
+2. Nouveau Pydantic model `VideoTo3DRequest`
+3. Nouvelle Celery task `video_to_3d_task` dans `tasks_3d.py`
+4. Nouveau endpoint `/api/v1/video-to-3d/async` dans `routes_3d.py`
+5. Ajouter `"app.tasks_3d.video_to_3d_task"` au `task_routes` du `worker.py`
+6. Nouveau composant frontend `VideoTo3D.tsx`
+
+Architecture extensible : pas de refactor des autres modes.
+
+---
+
+## 20. Algorithmes & mathématiques
+
+### Q20.1 Comment fonctionne mathématiquement la diffusion ?
+**R :** Modèle inverse d'un processus de diffusion :
+- **Forward** : on ajoute progressivement du bruit gaussien à une donnée (image latent, ici 3D latent) sur T steps. Au step T, c'est du bruit pur.
+- **Reverse** : on entraîne un réseau (DiT) à prédire le bruit ajouté à chaque step. À l'inférence, on part du bruit pur et on débruit step by step.
+- **Conditionnement** : on injecte un signal (image, texte) via attention cross pour guider le débruitage.
+- **Classifier-Free Guidance** : `guidance_scale > 1` mélange prédiction conditionnée et non-conditionnée pour amplifier l'effet du conditionnement.
+
+### Q20.2 Pourquoi `guidance_scale=5` par défaut ?
+**R :** Compromis qualité/diversité :
+- `guidance_scale=1` : pas de guidance, génération diverse mais peu fidèle au prompt
+- `guidance_scale=7.5+` : très fidèle mais oversaturé, artefacts
+- `5` : sweet spot pour Hunyuan3D selon le papier
+
+### Q20.3 Combien de paramètres a votre DiT ?
+**R :**
+- `hunyuan3d-dit-v2-mini` : ~600M paramètres
+- `hunyuan3d-dit-v2-mv` : ~1.1B paramètres (multi-vues)
+- DiT paint : ~1.3B paramètres (texture)
+
+Comparativement, Stable Diffusion 1.5 = 860M, SDXL = 2.6B.
+
+### Q20.4 Qu'est-ce que la projection orthographique ?
+**R :** Projection 3D→2D sans perspective (lignes parallèles restent parallèles). Matrice 4x4 :
+```
+[2/(R-L), 0,        0,         -(R+L)/(R-L)]
+[0,       2/(T-B),  0,         -(T+B)/(T-B)]
+[0,       0,       -2/(F-N),   -(F+N)/(F-N)]
+[0,       0,        0,          1          ]
+```
+Avec `ortho_scale=1.2` : window [-0.6, 0.6] × [-0.6, 0.6]. Tout vertex `(x, y, z)` avec `|x|, |y| ≤ 0.6` est visible.
+
+### Q20.5 Pourquoi orthographique et pas perspective pour le rendu multi-vues ?
+**R :** Le modèle multi-vues est entraîné en orthographique (convention Hunyuan). Avantages :
+- Pas de distorsion de perspective (textures plus uniformes)
+- Calcul UV plus simple (mappage linéaire)
+- Convention partagée par tous les modèles de génération multi-vues récents (Zero123++, MVDream)
+
+### Q20.6 Comment fonctionne `set_mesh` ?
+**R :** Trois étapes :
+1. **Transformation de coordonnées** : `(x, y, z) → (-x, z, -y)` (négation X+Y, swap Y+Z). Aligne le repère hy3dgen sur celui attendu par le renderer.
+2. **Auto-centering** : translate par `-bbox_center` pour mettre le centre de la bounding box à l'origine
+3. **Normalization** : scale par `scale_factor / bounding_sphere_diameter` (avec `scale_factor=1.15`). Place les vertices dans un range cohérent pour le rendu.
+
+### Q20.7 Comment marching cubes extrait le mesh ?
+**R :** Le VAE 3D produit un champ d'occupation 3D (grille voxel). Marching Cubes parcourt chaque voxel, regarde les 8 coins (dedans/dehors selon un seuil), et selon les 256 configurations possibles, génère 0 à 5 triangles approximant l'isosurface dans ce voxel. Tous les triangles agrégés = le mesh.
+
+### Q20.8 Qu'est-ce que face_reducer (quadric mesh simplification) ?
+**R :** Algorithme de Garland-Heckbert. Pour chaque arête, calcule un coût de collapse (combien la forme change si on fusionne les deux vertices). Collapse les arêtes de plus faible coût itérativement jusqu'à atteindre le `face_count` cible. Préserve les détails saillants (arêtes vives).
+
+### Q20.9 Comment fonctionne UV unwrap ?
+**R :** Mapping inverse de la surface 3D vers un plan 2D. Algos : 
+- **Conformal** (préserve les angles, distort les aires)
+- **ARAP** (As Rigid As Possible — préserve les distances locales)
+- **Smart UV Project** (auto-couture par groupes de faces co-planaires)
+
+hy3dgen utilise `mesh_uv_wrap` qui produit un atlas UV exploitable pour la texture.
+
+### Q20.10 Pourquoi `bake_exp=4` ?
+**R :** Dans le bake multi-vues : `weighted_cos = view_weight × cos(angle_camera_normal)^bake_exp`. L'exposant amplifie la préférence pour les vues frontales (angle 0 = cos 1 = poids 1, angle 60° = cos 0.5 = poids 0.5^4 = 0.0625). Évite les blurs aux angles obliques où la précision UV est faible.
+
+### Q20.11 Qu'est-ce que cv2.inpaint Navier-Stokes ?
+**R :** Algorithme d'inpainting basé sur la PDE de Navier-Stokes (fluides). Propage les pixels environnants dans la zone à remplir en suivant les "courbes de niveau" (isolignes d'intensité). Préserve les bords et continuités. Utilisé dans `texture_inpaint` pour combler les pixels UV non visibles depuis aucune caméra.
+
+### Q20.12 Mathématiquement, qu'est-ce que la convex hull du masque case ?
+**R :** Plus petit polygone convexe contenant tous les points du masque. Algos : Quickhull O(n log n) ou Graham scan O(n log n). En OpenCV : `cv2.convexHull(contour)`. On l'utilise pour englober le boîtier (qui peut avoir des creux dus aux gravures) avec un polygone unique.
+
+---
+
+## 21. GPU & gestion mémoire
+
+### Q21.1 Combien de VRAM consomme votre système ?
+**R :** Approximativement :
+- `hunyuan3d-dit-v2-mini` (FP32) : ~2.4 GB
+- `hunyuan3d-paint-v2-0` : ~5 GB
+- `hunyuan3d-mv` : ~4 GB
+- `Hyper-SDXL` : ~10 GB (FP32) ou ~5 GB (FP16)
+- Activations runtime : 1-3 GB selon batch + resolution
+
+Total chargé simultanément : insurmontable sur 16 GB MPS Apple. D'où le **offload manuel CPU↔GPU**.
+
+### Q21.2 Comment fonctionne l'offload ?
+**R :** `DeviceManager._offload_to_cpu("pipeline_name")` :
+1. Déplace tous les tenseurs du pipeline sur `device='cpu'`
+2. Libère la VRAM (forcé via `gc.collect()` + `torch.mps.empty_cache()`)
+3. Quand on en a besoin : `_move_to_device("pipeline_name")` pour réinjecter sur GPU
+
+Cycle classique : i23d → offload(i23d) → texgen → offload(texgen) → i23d (next request).
+
+### Q21.3 MPS vs CUDA ?
+**R :**
+- **MPS** (Metal Performance Shaders) : Apple Silicon (M1/M2/M3). Lent vs CUDA mais pratique en dev.
+- **CUDA** : NVIDIA. Beaucoup plus rapide (Tensor Cores, plus de SMs).
+
+Notre code détecte le device via `get_device()` qui renvoie `cuda > mps > cpu` dans cet ordre.
+
+### Q21.4 Pourquoi `torch.inference_mode()` et pas `torch.no_grad()` ?
+**R :** `inference_mode()` est plus strict :
+- Désactive autograd (comme `no_grad()`)
+- Marque les tenseurs créés comme "inference" — ils ne peuvent JAMAIS être utilisés en training (catch d'erreurs early)
+- Évite certaines opérations de bookkeeping → ~5-10% plus rapide en pure inference
+
+Recommandé en prod pour des workloads inference-only.
+
+### Q21.5 Mixed precision (FP16) ?
+**R :** Pas utilisé dans cette version. Hunyuan3D peut tourner en FP16 (`torch_dtype=torch.float16`) pour :
+- 2x moins de VRAM
+- 1.5-2x plus rapide
+- Légère perte de qualité (souvent imperceptible)
+
+Pas activé par défaut pour préserver la qualité. Activable via une option future.
+
+### Q21.6 Comment vous gérez les fuites mémoire ?
+**R :**
+- `empty_cache()` après chaque génération (`torch.mps.empty_cache()` ou `torch.cuda.empty_cache()`)
+- `del` explicite sur les gros tenseurs intermédiaires (mesh, outputs)
+- `gc.collect()` périodique
+- Sur MPS, bug connu de fragmentation : un restart périodique du worker peut être nécessaire
+
+### Q21.7 Quel est le risque OOM ?
+**R :** Si on essaie de charger 2 pipelines simultanément (i23d + texgen) sur 16 GB MPS : OOM. C'est pourquoi `_offload_to_cpu` est appelé entre les étapes. Sur GPU 24 GB : pas de problème, on peut tout garder en VRAM.
+
+### Q21.8 Comment debug un OOM ?
+**R :**
+- `torch.mps.current_allocated_memory()` / `torch.cuda.memory_allocated()` pour mesurer
+- `torch.cuda.memory_summary()` pour le détail par tenseur (CUDA only)
+- Réduire `octree_resolution` ou `num_chunks` pour diminuer la mémoire peak
+- Activer mixed precision (FP16)
+
+---
+
+## 22. Hunyuan3D internals (plus profond)
+
+### Q22.1 Quelle est l'architecture exacte du DiT Hunyuan3D ?
+**R :** Transformer avec :
+- Patches 3D latents en entrée (compressés par le VAE)
+- Multi-head self-attention + cross-attention pour le conditionnement (CLIP image features)
+- Couches MLP avec activation GELU
+- Time embedding (sinusoidal) pour conditionner sur le step de diffusion
+- Output : prediction du bruit ajouté
+
+Variante "Flow Matching" plutôt que diffusion classique (DDPM) → moins de steps nécessaires.
+
+### Q22.2 Qu'est-ce que Flow Matching ?
+**R :** Alternative à DDPM. Apprend un champ de vélocité qui transporte du bruit gaussien vers la distribution cible en T pas. Avantages : peut converger en 5-30 steps (vs 50-100 pour DDPM), entraînement plus stable. C'est pourquoi notre default `steps=5-30` fonctionne.
+
+### Q22.3 Pourquoi 6 vues pour le multi-view diffusion ?
+**R :** 6 vues = 4 azimuths (0°, 90°, 180°, 270°) à élévation 0 + 1 vue top (élév +90°) + 1 vue bottom (élév -90°). Couvre la sphère unitaire avec un nombre raisonnable de samples. Pourrait être plus (12, 24) mais : (a) plus lent, (b) le UV unwrap n'a pas besoin de plus pour couvrir la surface.
+
+### Q22.4 Comment le modèle paint génère les multi-vues ?
+**R :** Pipeline `Hunyuan3DPaintPipeline` :
+1. Input : image delight (sans éclairage) + normal maps + position maps des 6 vues
+2. Modèle de diffusion conditionné sur ces 3 inputs concatenés (via cross-attention)
+3. Génère 6 images RGB en parallèle (architecture multi-vues consistente)
+4. Sortie : 6 images texturées cohérentes (même éclairage, mêmes matériaux)
+
+### Q22.5 Qu'est-ce que delight et pourquoi c'est important ?
+**R :** Le modèle `hunyuan3d-delight-v2-0` retire l'éclairage de l'image source pour obtenir l'**albedo** (couleur de matériau brute). Si on ne le faisait pas, le mesh aurait l'éclairage gravé dans sa texture (un highlight blanc sur le boîtier resterait blanc sous toute lumière). Avec delight : la texture est neutre, le rendu Unity peut appliquer son propre éclairage PBR.
+
+### Q22.6 Quel est le pipeline back_project ?
+**R :** Pour chaque vue caméra :
+1. Rasterize le mesh sous cette vue (rasterizer custom CUDA dans `custom_rasterizer/`)
+2. Pour chaque pixel canvas du mesh, calcule la coordonnée UV correspondante
+3. Lit la couleur du pixel multi-vues à cette position canvas
+4. Écrit cette couleur à la coordonnée UV dans la texture map
+
+Inverse : `(canvas_x, canvas_y) → (uv_u, uv_v) → couleur`.
+
+### Q22.7 Pourquoi un rasterizer custom ?
+**R :** Les rasterizers généralistes (nvdiffrast, PyTorch3D) ont des limitations sur MPS Apple. Le custom rasterizer (`hy3dgen/texgen/custom_rasterizer/`) est écrit en C++ avec bindings Python, fonctionne sur CPU/CUDA (et MPS via fallback CPU). Convention X/Y spécifique : `pixel_y = (0.5 + 0.5 * clip_Y) * (height-1)` (Y-flip implicite).
+
+### Q22.8 Quel est le format GLB final ?
+**R :** **glTF 2.0 Binary** (GLB) :
+- Mesh : vertices, faces (triangles), normales (si disponibles), UVs
+- Materials : PBR (base color, normal, metalness, roughness — pas tous remplis)
+- Texture : embedded base64 PNG
+- Hierarchy : scene → node → mesh
+- Format binaire (vs glTF JSON+textures séparés) : un seul fichier
+
+trimesh export gère tout : `mesh.export("file.glb")`.
+
+---
+
+## 23. Frontend deep-dive
+
+### Q23.1 Quelle est la taille de votre bundle JS ?
+**R :** Production build Vite : ~250-400 KB gzipped (sans model-viewer qui est lazy-loaded). Largement acceptable pour une SPA.
+
+### Q23.2 Comment optimiseriez-vous le bundle ?
+**R :**
+- Code splitting par route (pas implémenté car SPA simple)
+- Lazy load model-viewer (~80 KB) : `import("@google/model-viewer")` dynamiquement
+- Tree-shaking automatique via Vite/Rollup
+- Compression Brotli en production (Nginx config)
+
+### Q23.3 Quelle est l'accessibilité (a11y) ?
+**R :** Basique :
+- Boutons avec `aria-label`
+- Forms avec `<label htmlFor>`
+- Couleurs avec contrast ratio ≥ 4.5:1 (vérifié)
+- Pas testé avec screen reader
+
+Pour production : audit Lighthouse a11y, tests avec NVDA/VoiceOver.
+
+### Q23.4 SEO ?
+**R :** Pas applicable (SPA derrière login, pas de contenu indexable). Pour production publique : SSR (Next.js) ou meta tags via React Helmet.
+
+### Q23.5 Comment gérez-vous les erreurs réseau ?
+**R :** `fetch()` wrappé dans try/catch, message d'erreur dans un toast. Pas de retry automatique (sauf pour le polling qui re-essaye au prochain tick). Pour production : intercepteur global avec retry exponentiel + offline detection.
+
+### Q23.6 Why no React Query / SWR ?
+**R :** Considéré. Notre cas : peu de fetch (1-2 par mode), pas de cache complexe à gérer, polling déjà custom (useTaskPolling). React Query ajouterait ~30 KB pour peu de valeur. Si l'app grossissait (50+ endpoints) : justifié.
+
+### Q23.7 Comment fonctionne `<model-viewer>` ?
+**R :** Web Component de Google. Wrapper autour de three.js + WebGL. Charge un GLB via attribut `src`, gère l'orbit camera, le PBR rendering, l'IBL (Image-Based Lighting). Auto-rotation possible. Une lib mature et performante, alternative à three.js raw qui demanderait 200+ lignes de boilerplate.
+
+### Q23.8 Pourquoi pas Three.js direct ?
+**R :** Plus de contrôle mais beaucoup plus de code. Pour un viewer simple (orbit + zoom + auto-rotate), `<model-viewer>` est déclaratif et déjà accessible. Si on voulait des features custom (annotations, mesh edit, scene complexe), Three.js direct + react-three-fiber serait justifié.
+
+### Q23.9 Comment gérez-vous les images uploadées dans le navigateur ?
+**R :** `FileReader.readAsDataURL()` pour base64 (envoyé tel quel au backend), `URL.createObjectURL()` pour preview avant upload. Cleanup via `URL.revokeObjectURL()` pour éviter les fuites mémoire DOM.
+
+### Q23.10 Comment évitez-vous les re-renders inutiles ?
+**R :**
+- `useState` localisé (pas remonté au parent si pas nécessaire)
+- `useCallback` pour les handlers passés à des enfants memoized
+- `useMemo` pour les calculs coûteux (rarement nécessaire ici)
+- Pas de React.memo systématique (over-engineering pour notre échelle)
+
+---
+
+## 24. Base de données & persistance
+
+### Q24.1 Pourquoi SQLite et pas une vraie BDD ?
+**R :** Cf. Q16.4. Pour récap : zero-config, suffisant en volume, threadsafe avec WAL. Trois SQLite distincts :
+1. `gallery.db` — modèles 3D générés
+2. `pipeline_checkpoints.db` — checkpoints LangGraph
+3. ChromaDB (utilise SQLite interne) — cache vectoriel
+
+### Q24.2 Qu'est-ce que WAL mode ?
+**R :** Write-Ahead Logging. Mode SQLite qui :
+- Permet plusieurs readers concurrent à un writer
+- Écritures dans un journal séparé (`.db-wal`), puis batch-flush vers le fichier principal
+- Réduit les conflits lock vs mode rollback journal classique
+
+Activé via `PRAGMA journal_mode=WAL`. Indispensable pour notre cas multi-thread.
+
+### Q24.3 Comment gérez-vous les transactions ?
+**R :** Implicite via `conn.commit()`. Pour gallery_db, chaque `insert/delete/update` est sa propre transaction (autocommit-like). Pas de transactions multi-statement actuellement — pas nécessaire (opérations atomiques par UID).
+
+### Q24.4 Risque de corruption ?
+**R :** SQLite corruption rare (un des SGBDR les plus robustes). Causes possibles :
+- Crash matériel pendant l'écriture (WAL atténue ce risque)
+- Bug filesystem (rare sur ext4/APFS)
+- Modification concurrente sans lock (impossible avec notre `threading.Lock`)
+
+Backup recommandé en production : copie du fichier `.db` après `VACUUM`.
+
+### Q24.5 Comment migrez-vous le schéma ?
+**R :** `_MIGRATE_SQL = "ALTER TABLE models ADD COLUMN has_texture INTEGER DEFAULT 0;"` dans `_init()`. SQLite supporte `ALTER TABLE ADD COLUMN`. Pour des migrations plus complexes : Alembic (overkill ici), ou script manuel.
+
+### Q24.6 Pourquoi `_lock` global ?
+**R :** SQLite est threadsafe mais une seule écriture à la fois. Le lock évite les `database is locked` errors lors d'écritures concurrentes depuis plusieurs threads (Celery workers, WebSocket handlers). Lecture sans lock (SELECT) car concurrent OK avec WAL.
+
+### Q24.7 Combien d'entrées dans la galerie ?
+**R :** Pas de limite hard. SQLite gère facilement 1M+ rows. Notre cas réaliste : 100-10000 modèles. Index sur `created_at DESC` pour les listings rapides.
+
+### Q24.8 Comment supprimer un modèle ?
+**R :** Endpoint `DELETE /models/{uid}` :
+1. Validation regex sur UID
+2. `gallery_db.delete(uid)` — supprime la row
+3. Suppression du fichier GLB sur disque (`Path.unlink()`)
+4. Suppression de l'entrée du cache vectoriel (si présente)
+
+---
+
+## 25. Networking & protocoles
+
+### Q25.1 HTTP/1.1, HTTP/2, ou HTTP/3 ?
+**R :** Uvicorn supporte HTTP/1.1 par défaut. HTTP/2 via `--http h2` (uvicorn + httptools). En production derrière Nginx : Nginx parle HTTP/2 ou HTTP/3 (QUIC) côté client, HTTP/1.1 côté backend. Pas critique pour notre cas (peu de requêtes parallèles).
+
+### Q25.2 Comment fonctionne le WebSocket upgrade ?
+**R :**
+1. Client envoie HTTP GET avec headers `Upgrade: websocket` + `Connection: Upgrade` + `Sec-WebSocket-Key`
+2. Serveur répond `101 Switching Protocols` avec `Sec-WebSocket-Accept` (hash du key)
+3. Le socket TCP passe en mode framing WebSocket
+4. Échanges full-duplex de frames texte/binaire jusqu'à close
+
+FastAPI gère ça via Starlette's `WebSocket` class.
+
+### Q25.3 Pourquoi gzip n'est pas activé sur l'API ?
+**R :** Devrait être ajouté (`GZipMiddleware`). Pour notre cas (JSON responses < 10 KB), peu d'impact. Pour gros payloads (mesh stats listing 1000+ models), gzip réduirait ~70%.
+
+### Q25.4 Comment fonctionne l'upload multipart ?
+**R :** Browser encode :
+```
+POST /upload HTTP/1.1
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary...
+
+------WebKitFormBoundary
+Content-Disposition: form-data; name="file"; filename="doc.pdf"
+Content-Type: application/pdf
+
+<binary bytes>
+------WebKitFormBoundary--
+```
+FastAPI parse via Starlette's multipart parser, expose `UploadFile` avec `.read()`, `.filename`, `.content_type`.
+
+### Q25.5 Pourquoi pas de gRPC ?
+**R :** Pas de cas d'usage : on a un seul client (le frontend React) qui parle HTTP/JSON. gRPC serait justifié pour : (a) micro-services communicant entre eux à haut débit, (b) clients dans plusieurs langages partageant des protobuf schemas. Notre architecture : monolithe Python backend + SPA → REST + WebSocket suffit.
+
+### Q25.6 Comment évitez-vous les Cross-Site Request Forgery (CSRF) ?
+**R :** Pas de cookies session (pas d'auth). Les endpoints prennent uniquement des inputs JSON via fetch — un attacker ne peut pas forger une requête depuis un autre site sans CORS approuvé. CORS whitelist + pas de credentials = pas de CSRF.
+
+### Q25.7 Étapes du chargement initial du frontend ?
+**R :**
+1. Browser fetch `/` (Nginx sert `index.html`)
+2. Parse HTML, fetch CSS + JS bundles (Vite outputs versionnés)
+3. Hydrate React (mount `<App />` dans `<div id="root">`)
+4. App init : load theme from localStorage, fetch gallery `/api/v1/models`
+5. Render UI
+
+Total : 100-500 ms en local, ~1s sur réseau lent.
+
+---
+
+## 26. Error handling & resilience
+
+### Q26.1 Philosophie de gestion d'erreur ?
+**R :** "Échouer gracieusement". Trois niveaux :
+1. **Validation early** (Pydantic, regex) : rejeter les inputs invalides en 400 immédiatement
+2. **Try/except autour des appels externes** (ML, HTTP, DB) : logguer, retourner une erreur structurée
+3. **Fallback** : si possible, dégrader (ex : `_get_checkpointer` retourne None si SqliteSaver fail → pipeline marche sans checkpoint)
+
+Jamais d'unhandled exception qui crash le serveur.
+
+### Q26.2 Que se passe-t-il si rembg crash ?
+**R :** Vérifié dans `multiview_to_3d` :
+```python
+if t_frac > 0.95 or o_frac > 0.95:
+    logger.warning("MV view '%s' failed rembg ... — skipping", view_name)
+    continue
+```
+Si rembg produit une image complètement transparente ou opaque, on saute cette vue. Si toutes les vues échouent : exception remontée au client.
+
+### Q26.3 Et si le modèle ML est corrompu au chargement ?
+**R :** `Hunyuan3DService.__init__` charge les modèles en try/except. Si échec : log, attribut `has_t2i/has_mv/has_texgen` à False. Les endpoints vérifient (`if not svc.has_t2i: raise 503`). Frontend affiche un message "feature unavailable" plutôt que crasher.
+
+### Q26.4 Comment fonctionne la dégradation gracieuse du checkpointer ?
+**R :** `_get_checkpointer()` tente `SqliteSaver(conn)`. Si :
+- LangGraph pas installé : ImportError → retourne None
+- SQLite path inaccessible : OSError → retourne None
+- Toute autre erreur : log warning + None
+
+Le pipeline est compilé sans checkpointer → reprise impossible mais l'exécution normale fonctionne.
+
+### Q26.5 Que se passe-t-il si le LLM renvoie du non-JSON ?
+**R :**
+1. `extract_json_from_text` tente d'isoler le bloc JSON via regex
+2. Si rien trouvé : `parse fail` → spec=None → spec_valid=False
+3. Router LangGraph : retry (max 3) ou fallback hand-crafted
+4. Le pipeline finit toujours par produire un mesh, même si avec un spec dégradé
+
+### Q26.6 Que se passe-t-il si le mesh généré est invalide ?
+**R :** `validate_mesh_node` vérifie la présence des clés (`uid`, `preview_url`). Si manquant : `mesh_valid=False`, retry (max 2). Si épuisé : pipeline progresse vers `store_result` avec ce qu'il a (errors documentés). Pas de boucle infinie.
+
+### Q26.7 Idempotence ?
+**R :** `gallery_db.insert` utilise `INSERT OR REPLACE` (upsert sur PRIMARY KEY uid). Si la même tâche tourne deux fois (Celery requeue après crash), le résultat est cohérent. Le checkpointer LangGraph est aussi idempotent par `thread_id`.
+
+### Q26.8 Comment isolez-vous les pannes ?
+**R :** Bulkhead pattern via queues Celery séparées. Si `document_processing` queue est saturée (parsing PDF lent), `3d_generation` queue continue de tourner. Workers indépendants → un crash d'un worker ne propage pas.
+
+---
+
+## 27. Observabilité (à implémenter)
+
+### Q27.1 Que loggez-vous actuellement ?
+**R :** `logging.info` pour les étapes clés (start/end de chaque génération, temps écoulé). `logging.warning` pour les fallbacks (rembg failed, retry). `logging.exception` pour les erreurs avec stack trace. Output stdout (capté par Docker logs).
+
+### Q27.2 Quelles métriques ajouteriez-vous ?
+**R :**
+- `generation_duration_seconds` (histogram) par mode
+- `cache_hit_rate` (counter)
+- `queue_depth` (gauge) Celery
+- `worker_active_tasks` (gauge)
+- `gpu_memory_used_gb` (gauge)
+- `pipeline_node_duration_seconds` (histogram) par nœud LangGraph
+
+Format Prometheus, exposés via `/metrics` endpoint.
+
+### Q27.3 Alertes ?
+**R :** Cas alarmants :
+- Queue depth > 10 pendant > 5 min (saturation)
+- Aucune génération réussie en 1h (panne)
+- Cache hit rate < 5% (mauvaise utilisation, ou paramètres mal hashés)
+- GPU memory > 90% (risque OOM)
+- Worker process restart > 3 fois en 10 min (crash loop)
+
+### Q27.4 Tracing distribué ?
+**R :** OpenTelemetry idéal. Traces : frontend request → FastAPI → Celery dispatch → worker execution. Chaque span avec timing + attributs. Visualisé dans Jaeger/Tempo. Pas implémenté actuellement.
+
+### Q27.5 Comment debug en production sans accès SSH ?
+**R :**
+- Logs centralisés (ELK ou Loki) avec recherche par request_id / task_id
+- Sentry pour les exceptions (stack trace + breadcrumbs)
+- Métriques + dashboards Grafana
+- Health checks pour détecter dégradation
+
+### Q27.6 Audit trail ?
+**R :** Chaque génération crée une row gallery_db avec timestamp + paramètres + source. Permet de retracer "qui a généré quoi quand". Pour compliance plus stricte (RGPD) : log immutable séparé.
+
+---
+
+## 28. Méthodologie & CRISP-DM
+
+### Q28.1 Avez-vous suivi une méthodologie ?
+**R :** Oui, CRISP-DM adapté au contexte ML/dev :
+1. **Business understanding** : besoin de génération 3D automatisée depuis documents (pas de solution OSS existante)
+2. **Data understanding** : analyse des PDFs/emails clients, identification des entités 3D-pertinentes
+3. **Data preparation** : pipeline unstructured + nettoyage + extraction LLM
+4. **Modeling** : sélection Hunyuan3D vs alternatives (TripoSR, Shap-E, Zero123++), prototypes
+5. **Evaluation** : tests qualitatifs (rendus 3D), tests fonctionnels (smoke test)
+6. **Deployment** : Docker compose, intégration Unity
+
+### Q28.2 Combien de phases d'itération ?
+**R :** ~3 phases majeures :
+1. **POC** : prototype Image→3D simple (1 endpoint, threading)
+2. **MVP** : 4 modes + WebSocket + Unity integration
+3. **Production-ready** : Celery + LangGraph + tests + observabilité
+
+### Q28.3 Comment avez-vous priorisé les features ?
+**R :** Backlog informel :
+- **Must** : 4 modes fonctionnels, persistence, intégration Unity
+- **Should** : cache vectoriel, LangGraph pipeline, WebSocket
+- **Could** : checkpointer, smoke tests, HITL
+- **Won't (yet)** : authentification, rate limit, monitoring complet
+
+### Q28.4 Outils de project management ?
+**R :** Git (commits comme journal), Notion/Obsidian pour les notes architecturales, pas de Jira/Linear (équipe d'un seul dev).
+
+### Q28.5 Code review ?
+**R :** Solo. Auto-review via : (a) tests smoke avant chaque commit, (b) `py_compile` + `tsc`, (c) relecture diff avant push. Pour un projet en équipe : PR + CI obligatoires.
+
+### Q28.6 Combien de lignes de code ?
+**R :** Approximativement :
+- Backend Python : ~5000 LOC (hors hy3dgen vendoré)
+- Frontend TypeScript/TSX : ~4000 LOC
+- Unity C# : ~500 LOC
+- Tests + docs : ~1500 LOC
+- **Total** : ~11000 LOC
+
+---
+
+## 29. Comparaisons académiques
+
+### Q29.1 Comment Hunyuan3D se compare à Shap-E ?
+**R :**
+- **Shap-E** (OpenAI 2023) : génère des NeRFs, conversion en mesh moins propre
+- **Hunyuan3D 2.0** (Tencent 2024) : génère directement des meshes via DiT + VAE 3D, qualité géométrique supérieure, support texture intégré
+
+Sur les benchmarks F-Score et Chamfer Distance : Hunyuan3D > Shap-E par ~20-30%.
+
+### Q29.2 Zero123++ vs notre approche multi-vues ?
+**R :**
+- **Zero123++** : génère 6 vues consistantes depuis une seule image, puis reconstruction via SDS (Score Distillation Sampling)
+- **Hunyuan3D multi-view** : prend N vues réelles en input (notre cas), génère directement le mesh
+
+Trade-off : Zero123++ est plus pratique (1 photo suffit), Hunyuan3D-mv est plus fidèle (s'adapte aux vues réelles).
+
+### Q29.3 InstantMesh vs Hunyuan ?
+**R :**
+- **InstantMesh** (2024) : approche feed-forward (pas de diffusion), ~10s par génération mais qualité moindre
+- **Hunyuan3D** : diffusion (plus lent), qualité géométrique supérieure
+
+Choisi Hunyuan pour la qualité (PFE production-grade vs démo).
+
+### Q29.4 Hunyuan3D 2.0 vs 2.1 ?
+**R :** Hunyuan3D 2.1 (sortie fin 2024) ajoute :
+- Modèles plus gros (3B paramètres)
+- Meilleur support PBR
+- Améliorations qualité géométrique
+
+Pas adopté car : (a) requiert plus de VRAM (~16 GB minimum), (b) API breaking change. Sticking à 2.0 pour stabilité.
+
+### Q29.5 Pourquoi pas un papier académique original ?
+**R :** Le PFE est un projet d'**ingénierie** (intégration, déploiement, UX), pas de recherche fondamentale. Notre contribution : (a) architecture full-stack production-ready, (b) substitution multi-vues custom, (c) intégration Unity. Pas une nouvelle technique de génération 3D — ce serait un doctorat.
+
+### Q29.6 Le papier Hunyuan3D mentionne quoi ?
+**R :** "Hunyuan3D-2: A High-Resolution Texture-Aware 3D Generation Foundation Model" (Tencent Hunyuan, 2024). Architecture DiT 1.1B + VAE 3D. Entraîné sur ~10M de meshes 3D (mix Objaverse + datasets propriétaires). Benchmarks : FID-3D, Chamfer Distance, F-Score. Texture pipeline : delight + multi-view diffusion + UV-aware bake.
+
+---
+
+## 30. Roadmap & dette technique
+
+### Q30.1 Quelles sont les prochaines features prioritaires ?
+**R :**
+1. Visualisation progress fine-grained (stages.py + diffusion callbacks)
+2. ETA basé sur historique (pipeline_stats_db)
+3. Authentification utilisateur (OAuth2 + JWT)
+4. Rate limiting (slowapi)
+5. Tests E2E avec Playwright
+6. Monitoring (Prometheus + Grafana)
+
+### Q30.2 Quelle dette technique avez-vous accumulée ?
+**R :**
+- `current_step` field LangGraph supprimé mais le code historique mentionne encore (cleanup à finir)
+- Tests unitaires absents (juste smoke test)
+- Pas de CI/CD GitHub Actions
+- Docs API limitées au OpenAPI auto-généré (pas d'exemples curl)
+- Logs structurés manquants (juste `logging.info`)
+- Pas de versioning d'API (`/api/v1/` mais pas de v2 prévu)
+
+### Q30.3 Refactor le plus urgent ?
+**R :** Migrer le mode multi-vues vers `mv_pipeline` exclusivement (actuellement fallback i23d si mv fail). Code de fallback complexifie sans bénéfice clair.
+
+### Q30.4 Comment évaluez-vous la qualité du code ?
+**R :** Subjectif :
+- **Lisibilité** : bonne (commentaires denses sur les choix non-évidents)
+- **Modularité** : correcte (services séparés, pipeline modulaire)
+- **Tests** : faible (smoke test seul)
+- **Documentation** : moyenne (rapport PFE + ce Q&A, mais pas de docs API user-facing)
+
+### Q30.5 Open-source ?
+**R :** Repository public (`github.com/houcembelkhiria/3D-Generator`). License à formaliser (probablement MIT). Contributions externes : pas encore (projet personnel PFE).
+
+---
+
+## 31. Questions comportementales / parcours
+
+### Q31.1 Quel a été le défi technique le plus difficile ?
+**R :** La substitution multi-vues. 15 itérations sur 3-4 jours pour trouver l'approche correcte (re-center mesh sur médiane + target_case_size depuis vue IA + pas de warping). Chaque itération semblait raisonnable a priori mais introduisait des régressions visibles. Leçon : valider empiriquement, ne pas se fier à l'intuition seule sur les pipelines ML.
+
+### Q31.2 Qu'avez-vous appris pendant ce projet ?
+**R :**
+- **ML inference engineering** : c'est très différent du training. Mémoire GPU, offload, MPS quirks
+- **Async/distributed systems** : Celery, queue design, race conditions
+- **Architecture full-stack** : équilibre entre backend/frontend, où placer la logique
+- **Debugging itératif** : sur les bugs ML, valider par observation directe (visualiser, sauver des debug images)
+- **Trade-offs** : aucune décision n'est "best" en absolu, dépend du contexte (latence vs qualité, simplicité vs flexibilité)
+
+### Q31.3 Si vous deviez recommencer, que feriez-vous différemment ?
+**R :**
+1. **Celery dès le début** : la migration `threading.Thread`→Celery a été lourde
+2. **Tests CI dès le jour 1** : aurait évité des régressions
+3. **Architecture state-machine plus stricte** (Pydantic vs TypedDict) pour éviter les champs morts
+4. **Choisir Apple Silicon vs CUDA dès le début** : naviguer entre les deux a doublé certains effort
+5. **Documenter les "why nots"** : pourquoi pas X — souvent oublié
+
+### Q31.4 Comment travaillez-vous quand vous êtes bloqué ?
+**R :**
+1. Reproduire le bug en isolation (test minimum)
+2. Vérifier les logs + debug print
+3. Vérifier la documentation officielle
+4. Chercher GitHub issues du projet
+5. Demander à un LLM (Claude/GPT) avec contexte précis
+6. Si toujours bloqué : pause, retour avec œil neuf
+
+### Q31.5 Comment gérez-vous la pression / les deadlines ?
+**R :** Découpage en jalons hebdomadaires, MVP en premier, polish ensuite. Commit fréquent pour pouvoir rollback. Smoke test pour valider chaque ajout. Si vraiment en retard : couper le scope, pas la qualité.
+
+### Q31.6 Vous travaillez en équipe ou solo ?
+**R :** Ce projet : solo. Comfortable dans les deux modes. En équipe : code review, pair programming sur les bugs complexes, communication async via Slack/PR.
+
+---
+
+## 32. Questions très techniques (edge cases)
+
+### Q32.1 Que se passe-t-il si l'utilisateur upload un PNG transparent en front ?
+**R :** rembg ne fait rien (image déjà sans fond). Image passée telle quelle au DiT. Fonctionne bien — le DiT supporte les inputs avec alpha.
+
+### Q32.2 Et si l'image est en niveaux de gris ?
+**R :** `image.convert("RGB")` dans le service (`_decode_b64_image`). Le DiT est entraîné sur RGB, niveaux de gris convertis vers 3 canaux identiques.
+
+### Q32.3 Que se passe-t-il si l'image est gigantesque (10000x10000) ?
+**R :** Pour multi-vues : `pil.thumbnail((1024, 1024), Image.LANCZOS)` avant rembg pour éviter l'OOM. Pour image-to-3d : pas de cap explicite — pourrait OOM en RAM. À ajouter en production.
+
+### Q32.4 Concurrency : 2 utilisateurs uploadent en même temps ?
+**R :** FastAPI accepte les deux requêtes (async). Les deux tâches Celery vont en queue. Worker avec `prefetch_multiplier=1` traite séquentiellement. User #2 attend, voit "queued" puis "processing" via polling/WebSocket.
+
+### Q32.5 Que se passe-t-il si Redis disparait pendant qu'un job tourne ?
+**R :** Le worker se déconnecte du broker mais continue son inférence en cours. À la fin, il essaie d'écrire le résultat dans le backend (Redis aussi) : échec. La tâche est marquée FAILURE côté client. Le worker se reconnecte automatiquement pour les futures tâches.
+
+### Q32.6 Que se passe-t-il si la SQLite gallery_db est corrompue ?
+**R :** Au démarrage, `_init()` tente `CREATE TABLE IF NOT EXISTS`. Si corrompue : `sqlite3.DatabaseError`. Pas de récupération automatique. Solution : restaurer depuis backup ou supprimer (recrée vide).
+
+### Q32.7 Que se passe-t-il si l'utilisateur ferme le navigateur pendant la génération ?
+**R :** Aucun impact backend. Le job continue à tourner dans le worker, finit, écrit dans gallery_db. À la réouverture, l'utilisateur retrouve son modèle dans la galerie. C'est précisément pourquoi on a migré vers Celery (vs threading qui perdait tout sur refresh).
+
+### Q32.8 Comment vérifiez-vous que le mesh généré n'est pas vide ?
+**R :** Dans `image_to_3d` :
+```python
+if mesh is None:
+    raise RuntimeError("Shape generation produced no mesh...")
+```
+Plus loin : `validate_mesh_node` vérifie le GLB sur disque (existe + non vide).
+
+### Q32.9 Que se passe-t-il avec un Unicode dans le prompt (emoji, chinois) ?
+**R :** Stocké tel quel (UTF-8). Llama-3 supporte multi-langue. Hunyuan3D text-to-3D passe par t2i (HunyuanDiT supporte chinois nativement, SDXL via prompt translation). Les emoji dans le prompt sont généralement filtrés par le t2i model.
+
+### Q32.10 Comment gérez-vous les caractères spéciaux dans les noms de fichier ?
+**R :** Tous les fichiers générés sont nommés `{uid}.glb` où uid est un UUID v4 (`xxxxxxxx-xxxx-...`). Aucun caractère spécial. Les filenames uploadés par l'utilisateur ne sont jamais utilisés tels quels — on les renomme en UUID.
+
+### Q32.11 Race condition possible dans gallery_db ?
+**R :** Protégée par `threading.Lock`. Une seule écriture à la fois. Lectures concurrent OK (avec WAL). Pas de read-modify-write multi-statement (le `INSERT OR REPLACE` est atomique).
+
+### Q32.12 Memory leak potentiel ?
+**R :** Surveillé :
+- Pipelines ML : offload + `gc.collect()` après chaque génération
+- Worker process recyclable (Celery `worker_max_tasks_per_child=N` pour recycler après N tâches — pas activé par défaut, à considérer)
+- WebSocket : connection close handlers nettoient les ressources
+
+Si vraiment problématique : restart périodique du worker via cron / supervisor.
+
+---
+
+## 33. Démo live — comment réagir
+
+### Q33.1 "Faites une démo de la génération multi-vues"
+**R :** Préparer 3-4 photos d'un objet (avant la soutenance) :
+1. Démarrer `make dev-v2`
+2. Ouvrir frontend, mode "Multi-vues"
+3. Upload les 4 photos (front, back, left, right)
+4. Choisir preset "Balanced"
+5. Lancer génération
+6. Pendant que ça tourne, expliquer le pipeline (subgraphes, Celery, etc.)
+7. Montrer le résultat dans le viewer 3D
+8. Bonus : ouvrir dans Unity Editor
+
+### Q33.2 "Et si la démo plante ?"
+**R :** Prévoir un screenshot du résultat attendu en backup. Expliquer ce qui aurait dû se passer. Pas de panique — montrer la stack-trace, expliquer rapidement. Les profs apprécient la capacité à debugger en live.
+
+### Q33.3 "Montrez-moi le code de X"
+**R :** Avoir VS Code ouvert avec les fichiers clés :
+- `Backend/app/pipeline/graph.py`
+- `Backend/app/tasks_3d.py`
+- `Backend/hy3dgen/texgen/pipelines.py` (substitution multi-vues)
+- `Frontend/hooks/useTaskPolling.ts`
+- `UnityProject/Assets/Editor/SpawnBridge.cs`
+
+Naviguer rapidement via Cmd+P (file search).
+
+### Q33.4 "Pourquoi l'écran clignote-t-il / pourquoi c'est lent ?"
+**R :** Honest : "Le rendu 3D dans le navigateur (model-viewer) consomme du GPU. Sur ma machine en mode dev avec plusieurs onglets ouverts, ça peut ralentir. En production avec un GPU dédié, c'est fluide."
+
+### Q33.5 "Modifiez X et montrez le résultat"
+**R :** Garder l'environnement chaud : pas de redémarrage backend. Modifier le frontend (HMR via Vite = instantané). Pour le backend, expliquer qu'un redémarrage serait nécessaire pour les changements de pipeline LangGraph (mais Celery reload n'est pas instantané).
+
+### Q33.6 "Combien de temps ça prend de relancer après une modification ?"
+**R :** Frontend : <1s (Vite HMR). Backend FastAPI : ~5s (uvicorn reload). Celery worker : ~30-60s (reload modèles Hunyuan). C'est pourquoi le dev est itératif : tests unitaires + smoke test plutôt que restart complet à chaque modif.
+
+---
+
+## 34. Pour finir : phrases-clés à mémoriser
+
+### En cas de doute, dites :
+
+> "L'architecture combine **Celery pour l'infrastructure de queue/isolation** et **LangGraph pour l'orchestration de workflow**. Les deux sont complémentaires : Celery décide *où et quand* exécuter, LangGraph décide *quoi faire*."
+
+> "Le choix de re-centrer le mesh sur la **médiane des vertices** (vs bbox center) résout le problème de la case offset pour les montres à bracelet long. C'est la médiane qui est dominée par la région dense (le boîtier), pas la moyenne."
+
+> "Le target_case_size est dérivé de la **vue IA du modèle multi-vues** (qui rend la vraie géométrie du mesh), pas de la photo utilisateur. Cela évite l'overflow de texture sur le bracelet."
+
+> "Le pipeline LangGraph utilise **5 nœuds top-level + 2 sous-graphes compilés** pour modulariser le retry/fallback. Le checkpointer SqliteSaver permet la reprise après crash worker."
+
+> "Le smoke test (260 LOC, sans pytest) valide en 5 secondes l'API + le wiring Celery, sans nécessiter Redis ni GPU."
+
+### En cas de critique sur un choix :
+
+> "C'est un trade-off conscient entre [simplicité / vitesse / qualité]. Pour notre échelle [N utilisateurs / 1 GPU / X générations par jour], ce choix est justifié. Pour scaler à 100x, il faudrait [migration vers Triton / multi-GPU / etc.]."
+
+### Si on vous accuse de "wrapper d'API" :
+
+> "Le wrapper représente ~30% du code. Les 70% restants : substitution multi-vues custom (geometrically non-trivial), intégration Unity Editor (protocole custom), cache vectoriel (CLIP+DINO design), orchestration LangGraph (5 nœuds + 2 sous-graphes), et toute la stack production-grade (Celery prod-config, smoke tests, observabilité). Ce n'est pas juste un appel à un modèle externe."
+
+---
+
+**Encore une fois : bonne soutenance !**
