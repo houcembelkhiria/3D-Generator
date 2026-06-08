@@ -1,0 +1,29 @@
+#!/bin/bash
+# Writes a spawn request JSON and launches Unity Editor if it is not running.
+# REPO_ROOT is substituted by register-uri.sh at install time.
+set -euo pipefail
+
+REPO="__REPO_ROOT__"
+URL="${1:-}"
+
+if [ -z "$URL" ]; then
+  echo "usage: handler.sh unity3dgen://..." >&2
+  exit 2
+fi
+
+REQDIR="$REPO/UnityProject/Assets/SpawnRequests"
+PARSER="$REPO/scripts/UnityLauncher/parse.py"
+
+mkdir -p "$REQDIR"
+
+STAMP="$(python3 -c 'import time;print(f"{int(time.time()*1000000)}")')"
+OUT="$REQDIR/spawn_${STAMP}.json"
+
+python3 "$PARSER" "$URL" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+
+# Launch Unity Editor on the project if no Unity is already running.
+if ! pgrep -xq Unity; then
+  open -a Unity --args -projectPath "$REPO/UnityProject" >/dev/null 2>&1 || \
+    osascript -e 'display dialog "Could not launch Unity Editor. Install Unity Hub and make sure Unity 2022.3 LTS is available." buttons {"OK"} default button 1'
+fi

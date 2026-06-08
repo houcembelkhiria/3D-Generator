@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import routes
 from app.api import routes_3d
+from app.api import routes_unity
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ tags_metadata = [
     {"name": "3D Models", "description": "Access and list generated 3D models"},
     {"name": "3D Generation", "description": "Generate 3D models from images, text, or multi-view inputs"},
     {"name": "PDF Tools", "description": "PDF utility operations including text extraction"},
+    {"name": "Unity Integration", "description": "Register the unity3dgen:// URL handler on the host"},
 ]
 
 app = FastAPI(
@@ -86,6 +88,9 @@ app.include_router(routes.router, prefix="/api/v1")
 
 # 3D generation routes (image-to-3d, text-to-3d, multiview-to-3d)
 app.include_router(routes_3d.router)
+
+# Unity launcher installer (macOS host only)
+app.include_router(routes_unity.router)
 
 
 

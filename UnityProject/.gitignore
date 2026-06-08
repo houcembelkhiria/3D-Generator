@@ -1,0 +1,53 @@
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Asset-meta noise
+sysinfo.txt
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+*.unitypackage
+*.apk
+*.aab
+*.unitypackage.meta
+*.unitypackage.tmp
+
+# Crash reports
+crashlytics-build.properties
+
+# Runtime spawn state (transient, written by URI launcher)
+Assets/SpawnRequests/
+Assets/SpawnRequests.meta
+Assets/Imported/
+Assets/Imported.meta
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# OS
+.DS_Store
+Thumbs.db

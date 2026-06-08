@@ -174,7 +174,7 @@ export default function App() {
 
     // Check if we have extracted text from PDF or user prompt
     const hasValidInput = extractedText.trim() || promptText.trim() || files.length > 0;
-    
+
     if (!hasValidInput) {
       addLog("Erreur: Veuillez entrer un prompt, extraire du texte d'un PDF ou attacher un fichier.", 'error');
       return;
@@ -187,7 +187,7 @@ export default function App() {
     setSystemStatus(prev => ({ ...prev, activeWorkers: 1 }));
 
     addLog(`🚀 Architecture PFE chargée. Pipeline démarré pour méthode: ${method}`, 'success');
-    
+
     // Ingestion Logic - prioritize extracted text from PDF
     if (extractedText.trim()) {
       addLog(`Ingestion de texte extrait d'un PDF (${extractedText.length} caractères)...`, 'info');
@@ -196,7 +196,7 @@ export default function App() {
        addLog(`Ingestion de ${files.length} fichier(s) attaché(s)...`, 'info');
        files.forEach(f => addLog(`Lecture: ${f}`, 'info'));
     }
-    
+
     if (promptText.trim() && !extractedText.trim()) {
        addLog("Ingestion du prompt textuel utilisateur...", 'info');
        addLog(`Contenu: "${promptText.substring(0, 40)}${promptText.length > 40 ? '...' : ''}"`, 'info');
@@ -206,9 +206,9 @@ export default function App() {
     setTimeout(() => {
       addLog("Bibliothèque 'unstructured' activée.", 'info');
       addLog("Nettoyage des données & parsing sémantique.", 'info');
-      
+
       setCurrentStep(PipelineStep.EXTRACTION);
-      
+
       // STEP B: Brain (LLM)
       setTimeout(() => {
         addLog("Chargement context Llama 3 8B (vLLM local)...", 'warning');
@@ -216,7 +216,7 @@ export default function App() {
         addLog("Extraction entités nommées (NER) en cours...", 'info');
         addLog("Validation Pydantic schema 'UnityMetadata'...", 'info');
         addLog("JSON Metadata généré avec succès.", 'success');
-        
+
         const extracted = method === GenerationMethod.PROCEDURAL ? MOCK_EXTRACTED_METADATA_PROCEDURAL : MOCK_EXTRACTED_METADATA_VISUAL;
         setMetadata(extracted);
 
@@ -240,11 +240,11 @@ export default function App() {
 
           // STEP D: MCP
           setTimeout(() => {
-            addLog("Connexion Client MCP (Python) -> Serveur MCP (Unity Editor).", 'warning');
+            addLog("Connexion Client MCP (Python) → Serveur MCP (Unity Editor).", 'warning');
             addLog(`Envoi commande: call_tool("SpawnAsset", { name: "${extracted.name}" })`, 'info');
             addLog("Unity Server a acquitté la réception.", 'success');
             addLog("Objet instancié dans la scène Active.", 'success');
-            
+
             setCurrentStep(PipelineStep.COMPLETED);
             setSystemStatus(prev => ({ ...prev, activeWorkers: 0 }));
             addLog("Pipeline terminé. En attente de nouvelle tâche.", 'info');
@@ -257,7 +257,7 @@ export default function App() {
     }, 2000);
   };
 
-  
+
 
   const getPageTitle = () => {
     switch(activeView) {
@@ -305,27 +305,27 @@ export default function App() {
           </div>
           <div className="flex flex-wrap gap-3 mt-4 md:mt-0 items-center">
             <ThemeToggle />
-            <StatusBadge 
-              label="RAM" 
-              status={systemStatus.ramUsage > systemStatus.ramTotal * 0.85 ? 'busy' : 'online'} 
-              value={`${systemStatus.ramUsage} / ${systemStatus.ramTotal} GB`} 
+            <StatusBadge
+              label="RAM"
+              status={systemStatus.ramUsage > systemStatus.ramTotal * 0.85 ? 'busy' : 'online'}
+              value={`${systemStatus.ramUsage} / ${systemStatus.ramTotal} GB`}
             />
-            <StatusBadge 
-              label={systemStatus.device === 'mps' ? 'MPS' : systemStatus.device === 'cuda' ? 'VRAM' : 'CPU'} 
-              status={systemStatus.vramUsage > systemStatus.vramTotal * 0.85 ? 'busy' : 'online'} 
-              value={systemStatus.vramTotal > 0 ? `${systemStatus.vramUsage} / ${systemStatus.vramTotal} GB` : 'N/A'} 
+            <StatusBadge
+              label={systemStatus.device === 'mps' ? 'MPS' : systemStatus.device === 'cuda' ? 'VRAM' : 'CPU'}
+              status={systemStatus.vramUsage > systemStatus.vramTotal * 0.85 ? 'busy' : 'online'}
+              value={systemStatus.vramTotal > 0 ? `${systemStatus.vramUsage} / ${systemStatus.vramTotal} GB` : 'N/A'}
             />
-            <StatusBadge 
-              label="Hunyuan3D" 
-              status={systemStatus.hunyuan3dReady ? 'online' : 'offline'} 
-              value={systemStatus.hunyuan3dReady ? 'READY' : 'LOADING'} 
+            <StatusBadge
+              label="Hunyuan3D"
+              status={systemStatus.hunyuan3dReady ? 'online' : 'offline'}
+              value={systemStatus.hunyuan3dReady ? 'READY' : 'LOADING'}
             />
           </div>
         </header>
 
         {/* CONTENT SCROLLABLE AREA */}
         <main className="flex-1 overflow-y-auto p-6 scrollbar-hide bg-theme-primary">
-          
+
           {/* VIEW: AGENT */}
           {activeView === 'agent' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pb-6">
@@ -335,7 +335,7 @@ export default function App() {
                   <h2 className="text-lg font-bold text-heading mb-4 flex items-center">
                     <IconMessageSquare className="mr-2 text-[#FF8C66]" /> Input Request
                   </h2>
-                  
+
                   <div className="flex-1 flex flex-col justify-end">
                     <p className="text-muted text-sm mb-4">
                       Describe the asset you want to generate or attach technical specifications (PDF, EML).
@@ -343,7 +343,7 @@ export default function App() {
 
                     {/* Chat Input Container */}
                     <div className={`input-container transition-all ${isProcessing ? 'opacity-50' : 'focus-within:ring-1 focus-within:ring-[#FF8C66] focus-within:border-[#FF8C66]'}`}>
-                        
+
                         {/* Attached Files Display */}
                         {files.length > 0 && (
                           <div className="px-3 pt-3 flex flex-wrap gap-2">
@@ -367,11 +367,11 @@ export default function App() {
                           onChange={(e) => setPromptText(e.target.value)}
                           disabled={isProcessing}
                         />
-                        
+
                         {/* Toolbar */}
                         <div className="flex items-center justify-between px-2 pb-2 border-t border-theme pt-2 mx-2">
                           <div className="flex gap-1">
-                              <button 
+                              <button
                                 onClick={addMockFile}
                                 disabled={isProcessing}
                                 className="p-2 text-theme-muted hover:text-theme-secondary hover:bg-theme-input rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -380,9 +380,9 @@ export default function App() {
                                 <IconPaperclip className="w-5 h-5" />
                               </button>
                           </div>
-                          
+
                           <div className="flex gap-2">
-                              <button 
+                              <button
                                 onClick={() => handleProcess(GenerationMethod.PROCEDURAL)}
                                 disabled={isProcessing}
                                 className="px-3 py-1.5 bg-[#FF8C66] hover:bg-[#ff7a4d] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded-lg text-xs font-bold transition-all shadow-lg shadow-[#FF8C66]/10 flex items-center gap-1"
@@ -390,7 +390,7 @@ export default function App() {
                                 <IconCpu className="w-3 h-3" />
                                 Code
                               </button>
-                              <button 
+                              <button
                                 onClick={() => handleProcess(GenerationMethod.VISUAL)}
                                 disabled={isProcessing}
                                 className="px-3 py-1.5 bg-[#7C3AED] hover:bg-[#6d28d9] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-[#7C3AED]/10 flex items-center gap-1"
@@ -432,19 +432,19 @@ export default function App() {
                   <h2 className="text-lg font-bold text-heading mb-4 flex items-center">
                     <IconDatabase className="mr-2 text-[#7C3AED]" /> Extracted Metadata
                   </h2>
-                  
+
                   {metadata ? (
                     <div className="flex-1 space-y-4">
                       <div className="bg-theme-input p-4 rounded-xl border border-theme font-mono text-xs text-[#7C3AED] overflow-x-auto">
                           <pre>{JSON.stringify(metadata, null, 2)}</pre>
                       </div>
-                      
+
                       <div className="bg-theme-input p-4 rounded-xl border border-theme flex flex-col items-center">
                           <div className="text-xs text-muted mb-2 w-full text-left uppercase tracking-wider">Asset Preview</div>
                           <div className="w-full aspect-square bg-theme-secondary rounded-lg flex items-center justify-center border border-theme relative overflow-hidden group">
-                            <img 
-                              src={`https://picsum.photos/400/400?random=${metadata.name}`} 
-                              alt="Asset Preview" 
+                            <img
+                              src={`https://picsum.photos/400/400?random=${metadata.name}`}
+                              alt="Asset Preview"
                               className="opacity-50 grayscale group-hover:grayscale-0 transition-all duration-500"
                             />
                             <div className="absolute inset-0 flex items-center justify-center">
@@ -466,16 +466,16 @@ export default function App() {
               </section>
             </div>
           )}
-                    
+
           {/* VIEW: FILES TREATMENT */}
           {activeView === 'files' && (
             <FilesTreatment onTextExtracted={handleTextExtracted} />
           )}
-                    
+
           {/* VIEW: SETTINGS */}
           {activeView === 'settings' && (
             <div className="max-w-4xl mx-auto space-y-8">
-              
+
               {/* SYSTEM RESOURCES CARD */}
               <div className="card overflow-hidden">
                 <div className="p-6 border-b border-theme">
@@ -490,9 +490,9 @@ export default function App() {
                         <label className="text-sm font-semibold text-theme-secondary">Total GPU VRAM Limit</label>
                         <span className="text-2xl font-mono text-[#FF8C66] font-bold">{systemStatus.vramTotal} GB</span>
                       </div>
-                      <input 
-                          type="range" 
-                          min="8" max="48" step="4" 
+                      <input
+                          type="range"
+                          min="8" max="48" step="4"
                           value={systemStatus.vramTotal}
                           onChange={() => {}}
                           className="w-full h-3 bg-theme-input rounded-lg appearance-none cursor-pointer accent-[#FF8C66]"
@@ -514,47 +514,47 @@ export default function App() {
                    <h2 className="text-xl font-bold text-heading flex items-center">
                     <IconActivity className="mr-3 text-[#FF8C66]" /> Service Connectivity
                   </h2>
-                   <p className="text-body mt-1">Toggle connections to external microservices.</p>
+                   <p className="text-body mt-1">Live status of backend capabilities.</p>
                 </div>
                 <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
-                   {/* Redis Toggle */}
+                   {/* Texture Generation */}
                    <div className="toggle-card">
                       <div className="flex items-center justify-between">
                           <span className="font-semibold text-heading">Texture Generation</span>
-                          <button 
-                              onClick={() => updateSystemStatus('redisConnected', !systemStatus.hunyuan3dReady)}
-                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.hunyuan3dReady ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
+                          <div
+                              className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.hasTexgen ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
+                              aria-label="Texture generation status"
                           >
-                              <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.hunyuan3dReady ? 'translate-x-6' : 'translate-x-0'}`} />
-                          </button>
+                              <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.hasTexgen ? 'translate-x-6' : 'translate-x-0'}`} />
+                          </div>
                       </div>
                       <p className="text-xs text-muted">
                         Handles asynchronous job processing for 3D generation (TripoSR/Shap-E). Essential for non-blocking API responses.
                       </p>
                       <div className="flex items-center text-xs">
-                        Status: 
-                        <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.hunyuan3dReady ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
+                        Status:
+                        <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.hasTexgen ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
                            {systemStatus.hasTexgen ? 'ENABLED' : 'DISABLED'}
                         </span>
                       </div>
                    </div>
 
-                   {/* MCP Toggle */}
+                   {/* Multi-View */}
                    <div className="toggle-card">
                       <div className="flex items-center justify-between">
                           <span className="font-semibold text-heading">Multi-View Mode</span>
-                          <button 
-                              onClick={() => updateSystemStatus('unityMcpConnected', !systemStatus.hasMv)}
+                          <div
                               className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ease-in-out ${systemStatus.hasMv ? 'bg-[#7C3AED]' : 'bg-[var(--bg-input)]'}`}
+                              aria-label="Multi-view mode status"
                           >
                               <div className={`w-6 h-6 rounded-full bg-white shadow-sm transition-transform duration-300 ${systemStatus.hasMv ? 'translate-x-6' : 'translate-x-0'}`} />
-                          </button>
+                          </div>
                       </div>
                       <p className="text-xs text-muted">
                         Model Context Protocol connection to Unity Editor. Enables direct scene manipulation tools (Spawn, Transform).
                       </p>
                       <div className="flex items-center text-xs">
-                        Status: 
+                        Status:
                         <span className={`ml-2 px-2 py-0.5 rounded ${systemStatus.hasMv ? 'bg-[#7C3AED]/20 text-[#7C3AED]' : 'bg-red-500/20 text-red-400'}`}>
                            {systemStatus.hasMv ? 'ENABLED' : 'DISABLED'}
                         </span>

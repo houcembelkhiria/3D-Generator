@@ -9,7 +9,7 @@ const TechBadge = ({ children }: { children: React.ReactNode }) => (
 export const ProjectSpecs = () => {
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-12">
-      
+
       {/* HEADER SECTION */}
       <div className="bg-[var(--bg-card)] rounded-2xl border border-theme p-8">
         <h1 className="text-3xl font-bold text-heading mb-4 bg-gradient-to-r from-[#FF8C66] via-[#FF5F6D] to-[#7C3AED] bg-clip-text text-transparent">
@@ -21,7 +21,7 @@ export const ProjectSpecs = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
+
         {/* LEFT COL: CONTEXT & STACK */}
         <div className="lg:col-span-1 space-y-8">
             {/* OBJECTIVES */}
@@ -82,7 +82,7 @@ export const ProjectSpecs = () => {
 
         {/* RIGHT COL: ARCHITECTURE & BACKLOG */}
         <div className="lg:col-span-2 space-y-8">
-            
+
             {/* ARCHITECTURE FLOW */}
             <div className="bg-[var(--bg-card)] rounded-2xl border border-theme p-6">
                  <h2 className="text-lg font-bold text-heading mb-4 border-b border-theme pb-2">Flux de Données "Agentique"</h2>
@@ -91,7 +91,7 @@ export const ProjectSpecs = () => {
                         <div className="w-8 h-8 rounded-full bg-[var(--bg-input)] flex items-center justify-center text-heading font-bold mr-4">1</div>
                         <div>
                             <strong className="text-[#FF8C66]">Réception & Analyse</strong>
-                            <p className="text-[var(--text-tertiary)]">Utilisateur envoie Email/PDF -> LLM extrait JSON (ex: type: chair, color: red).</p>
+                            <p className="text-[var(--text-tertiary)]">Utilisateur envoie Email/PDF → LLM extrait JSON (ex: type: chair, color: red).</p>
                         </div>
                      </div>
                      <div className="flex items-center p-3 bg-[var(--bg-tertiary)] rounded-lg border border-theme">
@@ -104,7 +104,7 @@ export const ProjectSpecs = () => {
                      <div className="flex items-center p-3 bg-[#7C3AED]/10 rounded-lg border border-[#7C3AED]/30">
                         <div className="w-8 h-8 rounded-full bg-[#7C3AED] flex items-center justify-center text-white font-bold mr-4">3</div>
                         <div>
-                            <strong className="text-[#7C3AED]">Action MCP (Client -> Serveur)</strong>
+                            <strong className="text-[#7C3AED]">Action MCP (Client → Serveur)</strong>
                             <p className="text-theme-secondary">
                                 <code>call_tool("ImportAsset", path)</code> puis <code>call_tool("SetTransform", pos)</code>.
                             </p>
@@ -126,9 +126,9 @@ export const ProjectSpecs = () => {
                     <span>Backlog Agile (18 Semaines)</span>
                     <span className="text-xs bg-[#7C3AED]/20 text-[#7C3AED] px-2 py-1 rounded">PFE Roadmap</span>
                 </h2>
-                
+
                 <div className="space-y-6 relative border-l-2 border-theme ml-3 pl-8">
-                    
+
                     {/* Phase 1 */}
                     <div className="relative">
                         <div className="absolute -left-[41px] bg-[var(--bg-input)] border-4 border-[var(--bg-card)] w-6 h-6 rounded-full"></div>
@@ -174,7 +174,7 @@ export const ProjectSpecs = () => {
                             <li>Implémenter Client MCP (Python SDK).</li>
                             <li>Développer Serveur MCP C# dans Unity.</li>
                             <li>Outils: <code>SpawnGLB</code>, <code>CreatePrimitive</code>.</li>
-                            <li>Orchestration Celery -> MCP Call.</li>
+                            <li>Orchestration Celery → MCP Call.</li>
                         </ul>
                     </div>
 
@@ -185,7 +185,7 @@ export const ProjectSpecs = () => {
                         <span className="text-xs font-mono text-theme-muted mb-2 block">Sprints 9+</span>
                         <ul className="list-disc list-inside text-sm text-[var(--text-tertiary)] space-y-1">
                             <li>Fenêtre "Moniteur IA" dans Unity.</li>
-                            <li>Test E2E : Email -> Unity sans clic.</li>
+                            <li>Test E2E : Email → Unity sans clic.</li>
                             <li>Optimisation VRAM.</li>
                         </ul>
                     </div>
