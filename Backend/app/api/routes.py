@@ -102,86 +102,6 @@ class ErrorResponse(BaseModel):
     """Error response model"""
     detail: str = Field(..., description="Error message describing what went wrong", example="Invalid file type. Only PDF files are allowed.")
 
-@router.post(
-    "/upload",
-    response_model=TaskResponse,
-    tags=["Document Processing"],
-    summary="Upload document for 3D generation",
-    description="""
-    Upload a PDF or Email document to initiate 3D model generation.
-    
-    The document will be processed asynchronously by Celery workers.
-    Use the returned `task_id` to check processing status.
-    
-    **Supported file types:**
-    - PDF documents (`application/pdf`)
-    - Email messages (`message/rfc822`)
-    
-    **Processing flow:**
-    1. File validation (type and size)
-    2. File storage in uploads directory
-    3. Celery task queued for processing
-    4. AI/ML pipeline generates 3D model
-    5. Result stored in generated directory
-    """,
-    response_description="Task information including task_id for status tracking",
-    responses={
-        400: {"model": ErrorResponse, "description": "Invalid file type"},
-        413: {"model": ErrorResponse, "description": "File too large"},
-        500: {"model": ErrorResponse, "description": "Internal server error"},
-    }
-)
-async def upload_file(
-    file: UploadFile = File(
-        ...,
-        description="Document file to upload (PDF or Email .eml)",
-        example="document.pdf or email.eml"
-    )
-):
-    """
-    Upload document for 3D generation processing using unstructured pipeline.
-    
-    Supports both PDF documents and Email files (.eml format).
-    The unstructured library parses the document and extracts metadata
-    for 3D model generation.
-    
-    - **file**: PDF or Email (.eml) file to process
-    - Returns task_id to track processing status
-    """
-    
-    # Validate file type
-    allowed_types = ["application/pdf", "message/rfc822"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Only PDF and Email files are supported"
-        )
-    
-    # Generate unique filename
-    file_id = str(uuid.uuid4())
-    file_extension = file.filename.split(".")[-1] if "." in file.filename else ""
-    filename = f"{file_id}.{file_extension}"
-    file_path = os.path.join(settings.UPLOAD_DIR, filename)
-    
-    # Save file
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    with open(file_path, "wb") as buffer:
-        content = await file.read()
-        buffer.write(content)
-    
-    # Start Celery task
-    task = celery_app.send_task(
-        "app.tasks.process_document",
-        args=[file_path, file.content_type],
-        task_id=file_id
-    )
-    
-    return TaskResponse(
-        task_id=file_id,
-        status="processing",
-        message="File uploaded successfully. Processing started."
-    )
-
 @router.get(
     "/task/{task_id}",
     response_model=TaskResult,
@@ -751,3 +671,55 @@ async def run_pipeline(
         status="processing",
         message="LangGraph pipeline started. Poll /task/{task_id} for status.",
     )
+
+
+@router.post(
+    "/resume-pipeline/{thread_id}",
+    response_model=PipelineRunResponse,
+    tags=["LangGraph Pipeline"],
+    summary="Resume a checkpointed LangGraph pipeline run",
+    description="""
+    Restart a pipeline run from its last completed node, using the LangGraph
+    checkpointer. Use this when the original task failed because the worker
+    crashed (OOM, kill, deploy) rather than because of a logical pipeline
+    error — checkpoint data for `thread_id` must still exist in the
+    pipeline_checkpoints.db.
+
+    Poll the SAME `/task/{thread_id}` endpoint to follow the resumed run.
+    """,
+)
+async def resume_pipeline(thread_id: str):
+    from app.pipeline.graph import get_run_state
+    if get_run_state(thread_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No checkpoint found for thread_id={thread_id}",
+        )
+    celery_app.send_task(
+        "app.tasks.resume_pipeline",
+        args=[thread_id],
+        task_id=thread_id,
+    )
+    return PipelineRunResponse(
+        task_id=thread_id,
+        status="processing",
+        message=f"Pipeline resume queued. Poll /task/{thread_id} for status.",
+    )
+
+
+@router.get(
+    "/pipeline-state/{thread_id}",
+    tags=["LangGraph Pipeline"],
+    summary="Inspect the last checkpointed state of a pipeline run",
+    description="Returns the most recent state dict saved by the checkpointer.",
+)
+async def get_pipeline_state(thread_id: str):
+    from app.pipeline.graph import get_run_state
+    snapshot = get_run_state(thread_id)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No checkpoint found for thread_id={thread_id}",
+        )
+    # Strip non-JSON-serialisable bits if any
+    return {"thread_id": thread_id, "state": snapshot}

@@ -1,6 +1,7 @@
 import React, { useState, useRef, ChangeEvent, useEffect } from 'react';
 import { GeneratedModel } from '../types';
 import { API_BASE } from '../api';
+import { useTaskPolling, formatNodeName } from '../hooks/useTaskPolling';
 
 interface TextExtractionResult {
   filename: string;
@@ -27,6 +28,9 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete,
   const [dragActive, setDragActive] = useState(false);
   const [progress, setProgress] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
+  // 3D pipeline polling (replaces the manual setInterval loop below)
+  const [pipelineTaskId, setPipelineTaskId] = useState<string | null>(null);
+  const pipelinePoll = useTaskPolling<any>(pipelineTaskId, API_BASE);
   // 3D generation from document
   const [generating3D, setGenerating3D] = useState(false);
   const [gen3DError, setGen3DError] = useState<string | null>(null);
@@ -165,23 +169,31 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete,
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       const { task_id } = await res.json();
-      addToast('Pipeline started, polling for result…', 'info');
+      addToast('Pipeline started — polling for result with live progress…', 'info');
+      // Hand off to useTaskPolling; useEffect below reacts to completion.
+      setPipelineTaskId(task_id);
+    } catch (e: any) {
+      setGen3DError(e.message);
+      addToast(`3D generation failed: ${e.message}`, 'error');
+      setGenerating3D(false);
+    }
+  };
 
-      // Poll until done
-      let data: any = null;
-      for (let attempt = 0; attempt < 120; attempt++) {
-        await new Promise(r => setTimeout(r, 3000));
-        const pollRes = await fetch(`${API_BASE}/api/v1/task/${task_id}`);
-        if (!pollRes.ok) throw new Error(`Poll failed: HTTP ${pollRes.status}`);
-        const poll = await pollRes.json();
-        if (poll.status === 'completed') { data = poll; break; }
-        if (poll.status === 'failed') throw new Error(poll.result?.error || 'Pipeline failed');
-      }
-      if (!data) throw new Error('Pipeline timed out');
-
-      const modelResult = data.result;
+  // React to pipeline poll state changes (completion / failure / progress toast)
+  const lastNodeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pipelineTaskId) return;
+    // Show progress toast when current node changes
+    const node = pipelinePoll.meta.current_node;
+    if (node && node !== lastNodeRef.current) {
+      lastNodeRef.current = node;
+      addToast(`Pipeline: ${formatNodeName(node)}`, 'info');
+    }
+    if (pipelinePoll.status === 'completed' && pipelinePoll.result && file) {
+      const modelResult = pipelinePoll.result;
+      const taskId = pipelineTaskId;
       const model: GeneratedModel = {
-        id: task_id,
+        id: taskId,
         previewUrl: modelResult?.preview_url?.startsWith('http')
           ? modelResult.preview_url
           : `${API_BASE}${modelResult?.preview_url ?? ''}`,
@@ -199,13 +211,17 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete,
       };
       onModelGenerated?.(model);
       addToast('3D model generated and added to gallery!', 'success');
-    } catch (e: any) {
-      setGen3DError(e.message);
-      addToast(`3D generation failed: ${e.message}`, 'error');
-    } finally {
       setGenerating3D(false);
+      setPipelineTaskId(null);
+      lastNodeRef.current = null;
+    } else if (pipelinePoll.status === 'failed') {
+      setGen3DError(pipelinePoll.error || 'Pipeline failed');
+      addToast(`3D generation failed: ${pipelinePoll.error || 'unknown'}`, 'error');
+      setGenerating3D(false);
+      setPipelineTaskId(null);
+      lastNodeRef.current = null;
     }
-  };
+  }, [pipelinePoll.status, pipelinePoll.meta.current_node, pipelinePoll.result, pipelinePoll.error, pipelineTaskId, file, onModelGenerated]);
 
   const triggerFileSelect = () => {
     fileInputRef.current?.click();
