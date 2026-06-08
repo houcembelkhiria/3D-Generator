@@ -40,7 +40,7 @@ class Hunyuan3DSettings:
     enable_t23d: bool = field(default_factory=lambda: os.environ.get("HY3D_ENABLE_T23D", "true").lower() == "true")
 
     # Performance
-    enable_quantization: bool = field(default_factory=lambda: os.environ.get('HY3D_QUANTIZE', 'true').lower() == 'true')
+    enable_quantization: bool = field(default_factory=lambda: os.environ.get('HY3D_QUANTIZE', 'false').lower() == 'true')
     enable_flashvdm: bool = field(default_factory=lambda: os.environ.get("HY3D_TURBO", "true").lower() == "true")
     mc_algo: str = "mc"
     profile: int = 3

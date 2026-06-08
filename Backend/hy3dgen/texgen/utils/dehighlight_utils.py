@@ -54,7 +54,7 @@ class Light_Shadow_Remover:
             corrected_bgr = torch.cat([corrected_bgr, alpha_channel], dim=-1)
         return corrected_bgr
 
-    def __call__(self, image, num_inference_steps=50):
+    def __call__(self, image, num_inference_steps=25):
         # Working fork: 50 steps hardcoded
         image = image.resize((512, 512), Image.Resampling.LANCZOS)
 

@@ -560,6 +560,14 @@ class Hunyuan3DService:
 
         image = self._decode_b64_image(image_b64)
         clean_image = self._remove_background(image)
+        # DEBUG: save cleaned image to inspect background removal quality
+        try:
+            import os as _os
+            _dbg_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
+            _os.makedirs(_dbg_dir, exist_ok=True)
+            clean_image.save(_os.path.join(_dbg_dir, 'clean_image.png'))
+        except Exception:
+            pass
         _t_start = time.time()
 
         # --- Incremental cache: track attempts per image ---
@@ -596,17 +604,9 @@ class Hunyuan3DService:
                 else:
                     logger.info("First generation — attempt #1")
 
-        # --- Blend with previous attempt's input for refinement ---
-        if _embedding is not None and _attempt > 1:
-            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
-            prev_input = self._input_history.get(emb_key)
-            if prev_input is not None:
-                clean_image = self._blend_with_previous(clean_image, prev_input, _attempt)
-        
-        # Store current clean input for next attempt's blending
-        if _embedding is not None:
-            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
-            self._lru_put(self._input_history, emb_key, clean_image.copy(), MAX_INPUT_HISTORY)
+        # NOTE: previous "incremental refinement" blended new input with cached
+        # input on cache hit — disabled because it fused unrelated images when
+        # CLIP embeddings happened to be close. Use the new image as-is.
 
         generator = torch.Generator(self.device).manual_seed(seed)
         t0 = time.time()
@@ -621,8 +621,15 @@ class Hunyuan3DService:
                 output_type="mesh",
                 enable_pbar=False,
             )
-        mesh = export_to_trimesh(outputs)[0]
+        _meshes = export_to_trimesh(outputs)
+        mesh = _meshes[0] if _meshes else None
         del outputs
+        if mesh is None:
+            raise RuntimeError(
+                "Shape generation produced no mesh. "
+                "The input image may be blank/transparent or too ambiguous. "
+                "Try a different seed, increase steps, or use a clearer input image."
+            )
         logger.info("Shape gen took %.1f s", time.time() - t0)
 
         include_normals = False
@@ -765,6 +772,15 @@ class Hunyuan3DService:
             t0 = time.time()
             image = self.t2i_pipeline(text, seed=seed)
             logger.info("Text-to-image took %.1f s (attempt #1)", time.time() - t0)
+            # DEBUG: save t2i output so we can inspect if mesh gen fails
+            try:
+                import os as _os
+                _dbg_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
+                _os.makedirs(_dbg_dir, exist_ok=True)
+                image.save(_os.path.join(_dbg_dir, 't2i_output.png'))
+                logger.info("DEBUG: saved t2i output to %s", _dbg_dir + '/t2i_output.png')
+            except Exception as _e:
+                logger.warning("Could not save t2i debug image: %s", _e)
             # Free t2i memory before shape gen
             self._offload_to_cpu("t2i_pipeline")
             
@@ -780,17 +796,37 @@ class Hunyuan3DService:
                 "best_seed": seed,
             }, MAX_PROMPT_HISTORY)
             
-            result = self.image_to_3d(
-                image_b64=image_b64,
-                seed=seed,
-                steps=steps,
-                guidance_scale=guidance_scale,
-                octree_resolution=octree_resolution,
-                num_chunks=num_chunks,
-                texture=texture,
-                face_count=face_count,
-                output_type=output_type,
-            )
+            # Shape gen may fail on ambiguous t2i images — retry with different seeds
+            max_retries = 3
+            last_error = None
+            result = None
+            for _try in range(max_retries):
+                _seed_try = seed + _try * 1000
+                try:
+                    result = self.image_to_3d(
+                        image_b64=image_b64,
+                        seed=_seed_try,
+                        steps=steps + _try,  # bump steps on retry
+                        guidance_scale=guidance_scale,
+                        octree_resolution=octree_resolution,
+                        num_chunks=num_chunks,
+                        texture=texture,
+                        face_count=face_count,
+                        output_type=output_type,
+                    )
+                    if _try > 0:
+                        logger.info("Text-to-3D succeeded on retry #%d with seed=%d", _try, _seed_try)
+                    break
+                except Exception as _e:
+                    last_error = _e
+                    logger.warning("Text-to-3D shape gen failed (attempt %d/%d, seed=%d): %s",
+                                    _try + 1, max_retries, _seed_try, _e)
+            if result is None:
+                raise RuntimeError(
+                    f"Text-to-3D failed after {max_retries} attempts. "
+                    f"The generated image may lack a clear subject. "
+                    f"Last error: {last_error}"
+                )
             result["attempt"] = 1
             result["generation_time"] = round(time.time() - _t_start, 1)
             result["prompt"] = text
@@ -862,15 +898,7 @@ class Hunyuan3DService:
                 else:
                     logger.info("MV first generation — attempt #1")
 
-        # --- Blend front view with previous attempt ---
-        if _embedding is not None and _attempt > 1:
-            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
-            prev_front = self._input_history.get(emb_key)
-            if prev_front is not None and "front" in image_dict:
-                image_dict["front"] = self._blend_with_previous(image_dict["front"], prev_front, _attempt)
-        if _embedding is not None and "front" in image_dict:
-            emb_key = hashlib.sha256(str(_embedding).encode()).hexdigest()[:12]
-            self._lru_put(self._input_history, emb_key, image_dict["front"].copy(), MAX_INPUT_HISTORY)
+        # NOTE: previous "incremental refinement" blending disabled — see image_to_3d.
 
         # Offload other pipelines for MV
         self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")

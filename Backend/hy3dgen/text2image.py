@@ -66,7 +66,7 @@ class HunyuanDiTPipeline:
         )[0][0]
 
     @torch.no_grad()
-    def __call__(self, prompt, seed=0, num_inference_steps=5):
+    def __call__(self, prompt, seed=0, num_inference_steps=10):
         seed_everything(seed)
         generator = torch.Generator(device=self.device)
         generator = generator.manual_seed(int(seed))

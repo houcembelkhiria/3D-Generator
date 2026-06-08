@@ -19,9 +19,9 @@ class Hunyuan3DTexGenConfig:
         self.device = device
         self.light_remover_ckpt_path = light_remover_ckpt_path
         self.multiview_ckpt_path = multiview_ckpt_path
-        self.candidate_camera_azims = [0, 90, 180, 270, 0, 180]
-        self.candidate_camera_elevs = [0, 0, 0, 0, 90, -90]
-        self.candidate_view_weights = [1, 0.1, 0.5, 0.1, 0.05, 0.05]
+        self.candidate_camera_azims = [0, 90, 180, 270]
+        self.candidate_camera_elevs = [0, 0, 0, 0]
+        self.candidate_view_weights = [1, 0.1, 0.5, 0.1]
         self.render_size = 2048
         self.texture_size = 2048
         self.bake_exp = 4
