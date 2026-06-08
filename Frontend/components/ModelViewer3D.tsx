@@ -5,9 +5,10 @@ interface ModelViewer3DProps {
   src: string;
   alt?: string;
   className?: string;
+  cameraOrbit?: string;
 }
 
-export const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ src, alt = '3D Model', className = '' }) => {
+export const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ src, alt = '3D Model', className = '', cameraOrbit }) => {
   const [error, setError] = useState(false);
 
   if (error) {
@@ -31,6 +32,7 @@ export const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ src, alt = '3D Mod
         shadow-intensity="1"
         ar-status="not-presenting"
         loading="eager"
+        camera-orbit={cameraOrbit ?? '0deg 75deg 105%'}
         onError={() => setError(true)}
         style={{ width: '100%', height: '100%', backgroundColor: 'transparent' }}
       />

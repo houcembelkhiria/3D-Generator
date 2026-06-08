@@ -73,12 +73,12 @@ class MultiViewTo3DRequest(BaseModel):
     left: Optional[str] = None
     right: Optional[str] = None
     seed: int = Field(1234, ge=0)
-    num_inference_steps: int = Field(5, ge=1, le=100)
-    guidance_scale: float = Field(5.0, ge=0.0, le=20.0)
-    octree_resolution: int = Field(128, ge=16, le=192)
-    num_chunks: int = Field(8000, ge=100)
+    num_inference_steps: int = Field(20, ge=1, le=100)
+    guidance_scale: float = Field(7.5, ge=0.0, le=20.0)
+    octree_resolution: int = Field(256, ge=16, le=380)
+    num_chunks: int = Field(20000, ge=100)
     texture: bool = False
-    face_count: int = Field(20000, ge=100)
+    face_count: int = Field(40000, ge=100)
     type: str = Field("glb")
 
 
@@ -106,7 +106,7 @@ async def image_to_3d(body: ImageTo3DRequest):
             face_count=body.face_count,
             output_type=body.type,
         )
-        _persist_to_gallery(result["uid"], result, source="image-to-3d")
+        _persist_to_gallery(result["uid"], result, source="image-to-3d", has_texture=body.texture)
         return JSONResponse(result, status_code=200)
     except Exception as exc:
         logger.exception("Image-to-3D failed")
@@ -131,7 +131,7 @@ async def text_to_3d(body: TextTo3DRequest):
             face_count=body.face_count,
             output_type=body.type,
         )
-        _persist_to_gallery(result["uid"], result, prompt=body.text, source="text-to-3d")
+        _persist_to_gallery(result["uid"], result, prompt=body.text, source="text-to-3d", has_texture=body.texture)
         return JSONResponse(result, status_code=200)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -166,7 +166,7 @@ async def multiview_to_3d(body: MultiViewTo3DRequest):
             face_count=body.face_count,
             output_type=body.type,
         )
-        _persist_to_gallery(result["uid"], result, source="multiview-to-3d")
+        _persist_to_gallery(result["uid"], result, source="multiview-to-3d", has_texture=body.texture)
         return JSONResponse(result, status_code=200)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -274,6 +274,7 @@ async def list_generated_models():
             "face_count": m.get("faceCount") or m.get("face_count"),
             "file_size_mb": m.get("fileSizeMb") or m.get("file_size_mb"),
             "size": m.get("size"),
+            "has_texture": bool(m.get("has_texture", False)),
         })
     return {"models": normalized}
 
@@ -410,7 +411,7 @@ _progress: dict = {}
 
 
 
-def _persist_to_gallery(uid: str, result: dict, prompt: str = "", source: str = "image-to-3d") -> None:
+def _persist_to_gallery(uid: str, result: dict, prompt: str = "", source: str = "image-to-3d", has_texture: bool = False) -> None:
     """Compute file stats then write one row to gallery DB."""
     glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
     if glb_path.exists():
@@ -437,6 +438,7 @@ def _persist_to_gallery(uid: str, result: dict, prompt: str = "", source: str = 
             generation_time=result.get("generation_time"),
             face_count=result.get("face_count"),
             file_size_mb=result.get("file_size_mb"),
+            has_texture=has_texture,
         )
     except Exception:
         logger.exception("gallery_db: failed to save %s", uid)

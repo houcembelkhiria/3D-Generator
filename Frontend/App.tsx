@@ -139,6 +139,7 @@ export default function App() {
           generationTime: m.generation_time ?? undefined,
           faceCount: m.face_count ?? undefined,
           fileSizeMb: m.file_size_mb ?? undefined,
+          hasTexture: m.has_texture ?? false,
         }));
       }
     } catch { /* backend unreachable; treat disk as empty */ }

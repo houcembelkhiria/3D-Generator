@@ -92,6 +92,9 @@ namespace ThreeDGenerator.Editor
                         }
                         File.WriteAllBytes(glbPath, www.downloadHandler.data);
                         AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+                        // Flush glTFast sub-assets (textures, materials) before loading prefab
+                        if (req.hasTexture)
+                            AssetDatabase.Refresh();
 
                         var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
                         if (prefab == null)
@@ -105,7 +108,7 @@ namespace ThreeDGenerator.Editor
                             var active = EditorSceneManager.GetActiveScene();
                             if (active.isDirty)
                                 EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo();
-                            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                            EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
                         }
 
                         var go = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
@@ -119,7 +122,11 @@ namespace ThreeDGenerator.Editor
                         var sv = SceneView.lastActiveSceneView;
                         if (sv != null) sv.FrameSelected();
                         EditorWindow.FocusWindowIfItsOpen<SceneView>();
-                        Debug.Log($"[SpawnBridge] spawned '{go.name}' (scene={req.scene ?? "existing"})");
+                        if (req.hasTexture)
+                            _EnsureLight();
+                        Debug.Log($"[SpawnBridge] spawned '{go.name}' (scene={req.scene ?? "existing"}, hasTexture={req.hasTexture})");
+                if (req.hasTexture)
+                    _ValidateTextures(go);
                     }
                     catch (Exception ex)
                     {
@@ -139,6 +146,31 @@ namespace ThreeDGenerator.Editor
                 SafeDelete(reqPath);
                 InFlight.Remove(reqPath);
             }
+        }
+
+        static void _EnsureLight()
+        {
+            if (UnityEngine.Object.FindObjectOfType<Light>() != null) return;
+            var lg = new GameObject("Directional Light");
+            var light = lg.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.intensity = 1.0f;
+            lg.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+            Debug.Log("[SpawnBridge] added Directional Light so textured model renders correctly");
+        }
+
+        static void _ValidateTextures(GameObject go)
+        {
+            foreach (var rend in go.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var mat in rend.sharedMaterials)
+                {
+                    if (mat != null && mat.mainTexture != null)
+                        return; // at least one texture found — all good
+                }
+            }
+            Debug.LogWarning($"[SpawnBridge] '{go.name}' was generated with texture but no texture is visible on its materials. " +
+                             "The GLB may have been generated without texture, or glTFast could not extract the embedded textures.");
         }
 
         static void SafeDelete(string path)

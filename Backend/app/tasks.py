@@ -278,12 +278,17 @@ def _mesh_to_obj_format(self, mesh_data: dict) -> str:
 
 @celery_app.task(bind=True)
 def run_pipeline(self, file_path: str, file_type: str) -> dict:
-    """Run the LangGraph 3D generation pipeline end-to-end."""
-    from app.pipeline.graph import pipeline
+    """Run the LangGraph 3D generation pipeline end-to-end (streaming)."""
     from app.pipeline.state import Pipeline3DState
 
-    self.update_state(state="PROCESSING", meta={"status": "Starting LangGraph pipeline"})
-    logger.info("run_pipeline: %s (%s)", file_path, file_type)
+    # Use the Celery task ID as the LangGraph thread_id so this run's
+    # checkpoints are isolated and can be resumed by ID if the worker crashes.
+    thread_id = str(self.request.id)
+    self.update_state(state="PROCESSING", meta={
+        "status": "Starting LangGraph pipeline",
+        "thread_id": thread_id,
+    })
+    logger.info("run_pipeline: %s (%s) thread_id=%s", file_path, file_type, thread_id)
 
     initial_state: Pipeline3DState = {
         "file_path": file_path,
@@ -301,16 +306,43 @@ def run_pipeline(self, file_path: str, file_type: str) -> dict:
         "current_step": "parse_document",
     }
 
+    # Stream node-level events so Celery state reflects live progress.
+    # Frontend polling /task/{id} now sees the current node name instead
+    # of just "PROCESSING" for 20 minutes.
+    from app.pipeline.graph import run_pipeline_streaming
+
+    def _on_node_event(node_name: str, state_update: dict):
+        # Truncate errors list to last 5 to keep Celery meta small
+        recent_errors = (state_update.get("errors") or [])[-5:]
+        self.update_state(state="PROCESSING", meta={
+            "status": f"Running {node_name}",
+            "current_node": node_name,
+            "current_step": state_update.get("current_step", node_name),
+            "recent_errors": recent_errors,
+            "thread_id": thread_id,
+        })
+
     try:
-        final_state = pipeline.invoke(initial_state)
+        final_state = run_pipeline_streaming(
+            initial_state, thread_id, on_event=_on_node_event,
+        )
         model_info = final_state.get("model_info") or {}
         self.update_state(
             state="COMPLETED",
-            meta={"status": "Pipeline complete", "model_info": model_info},
+            meta={
+                "status": "Pipeline complete",
+                "model_info": model_info,
+                "thread_id": thread_id,
+                "errors": final_state.get("errors", []),
+            },
         )
         return model_info
     except Exception as e:
         error_msg = f"Pipeline failed: {e}"
         logger.error(error_msg)
-        self.update_state(state="FAILED", meta={"status": "Pipeline failed", "error": str(e)})
+        self.update_state(state="FAILED", meta={
+            "status": "Pipeline failed",
+            "error": str(e),
+            "thread_id": thread_id,
+        })
         raise

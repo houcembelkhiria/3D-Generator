@@ -478,6 +478,49 @@ class Hunyuan3DService:
             logger.warning("_keep_largest_component failed: %s", exc)
             return mesh
 
+    def _straighten_straps(self, mesh):
+        """Reduce Z-axis banana curvature of strap geometry from single-image depth ambiguity."""
+        try:
+            import trimesh as _trimesh
+            if not isinstance(mesh, _trimesh.Trimesh):
+                return mesh
+            v = mesh.vertices.copy()
+            y_center = (v[:, 1].max() + v[:, 1].min()) / 2.0
+            y_range  = v[:, 1].max() - v[:, 1].min()
+            # Vertices beyond 20 % of half-height from the Y-center are strap
+            case_half = y_range * 0.20
+            dist = np.maximum(np.abs(v[:, 1] - y_center) - case_half, 0.0)
+            max_dist = dist.max()
+            if max_dist < 1e-6:
+                return mesh
+            case_mask = dist < 1e-6
+            z_target = float(v[case_mask, 2].mean()) if case_mask.any() else float(v[:, 2].mean())
+            # Moderate ramp: reduce banana curve while preserving real strap depth
+            t = (dist / max_dist) ** 0.60
+            z_weight = np.clip(t * 0.55, 0.0, 0.55)
+            v[:, 2] = v[:, 2] * (1.0 - z_weight) + z_target * z_weight
+            # X-width clamp: strap shouldn't be wider than the case (watch lug constraint)
+            x_center = (v[:, 0].max() + v[:, 0].min()) / 2.0
+            case_x_hw = float(np.abs(v[case_mask, 0] - x_center).max()) if case_mask.any() else 0.0
+            if case_x_hw > 1e-6:
+                strap_mask = ~case_mask
+                strap_x_limit = case_x_hw * 0.88
+                strap_indices = np.where(strap_mask)[0]
+                excess = np.abs(v[strap_indices, 0] - x_center) - strap_x_limit
+                over = excess > 0
+                if over.any():
+                    oi = strap_indices[over]
+                    signs = np.sign(v[oi, 0] - x_center)
+                    v[oi, 0] = x_center + signs * strap_x_limit
+            mesh = mesh.copy()
+            mesh.vertices = v
+            logger.info("Strap fix applied: Z-std %.4f → %.4f",
+                        mesh.vertices[:, 2].std(), v[:, 2].std())
+            return mesh
+        except Exception as exc:
+            logger.warning("_straighten_straps failed (non-fatal): %s", exc)
+            return mesh
+
     # --- Memory management (MPS) ---
     def _offload_to_cpu(self, *pipelines: str) -> None:
         if not self._dm.is_gpu:
@@ -515,13 +558,18 @@ class Hunyuan3DService:
             return
         dev = str(self._dm.device)
         for name, model in self.texgen_pipeline.models.items():
+            # Respect models that explicitly target CPU (e.g. multiview on MPS —
+            # 6-view cross-attention blows past MPS buffer limits at 22.5 GiB)
+            target = getattr(model, 'device', dev)
+            if target == 'cpu':
+                continue
             if hasattr(model, 'pipeline'):
                 model.pipeline.to(dev)
             elif hasattr(model, 'to'):
                 model.to(dev)
         import gc; gc.collect()
         empty_cache()
-        logger.info("Moved texgen to %s", dev)
+        logger.info("Moved texgen to %s (CPU-flagged models kept on CPU)", dev)
 
     def _offload_texgen_to_cpu(self):
         """Move texture gen sub-models back to CPU."""
@@ -767,105 +815,176 @@ class Hunyuan3DService:
         views: Dict[str, str],  # {view_name: base64_string}
         seed: int = 1234,
         steps: int = 5,
-        guidance_scale: float = 5.0,
-        octree_resolution: int = 128,
-        num_chunks: int = 8000,
+        guidance_scale: float = 7.5,
+        octree_resolution: int = 256,
+        num_chunks: int = 20000,
         texture: bool = False,
-        face_count: int = 20000,
+        face_count: int = 40000,
         output_type: str = "glb",
     ) -> Dict:
-        # Cap octree_resolution to 256 — 3-level FlashVDM (>256) has indexing bug
-        octree_resolution = min(octree_resolution, 192)
-        self._ensure_mv_loaded()
-        if not self.has_mv or self.mv_pipeline is None:
-            raise RuntimeError("Multi-view mode is disabled. Enable with HY3D_ENABLE_MV=true.")
+        # FIX #1: only front view provided → delegate to image_to_3d (better checkpoint + retry)
+        non_empty = {k for k, v in views.items() if v}
+        if non_empty == {"front"}:
+            logger.info("MV: only front view provided — delegating to image_to_3d")
+            return self.image_to_3d(
+                image_b64=views["front"],
+                seed=seed, steps=steps, guidance_scale=guidance_scale,
+                octree_resolution=octree_resolution, num_chunks=num_chunks,
+                texture=texture, face_count=face_count, output_type=output_type,
+            )
 
         uid = uuid.uuid4()
         out_type = output_type if output_type in SUPPORTED_FORMATS else "glb"
-
         _t_start = time.time()
+
+        # Decode all views; cap size before rembg to avoid OOM on large uploads
+        _MAX_VIEW_DIM = 1024
         image_dict: Dict[str, Image.Image] = {}
         for view_name, b64 in views.items():
-            if b64:
-                pil = self._decode_b64_image(b64)
-                pil = self._remove_background(pil)
-                image_dict[view_name] = pil
-                try:
-                    import os as _os
-                    from hy3dgen.shapegen.preprocessors import ImageProcessorV2 as _IVP
-                    _dbg_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
-                    _os.makedirs(_dbg_dir, exist_ok=True)
-                    pil.save(_os.path.join(_dbg_dir, f'mv_rembg_{view_name}.png'))
-                    _proc = _IVP(size=512)
-                    _img_np, _ = _proc.load_image(pil, border_ratio=0.15, to_tensor=False)
-                    Image.fromarray(_img_np).save(_os.path.join(_dbg_dir, f'mv_model_input_{view_name}.png'))
-                except Exception as _e:
-                    logger.debug("MV debug save failed: %s", _e)
+            if not b64:
+                continue
+            pil = self._decode_b64_image(b64)
+            if max(pil.size) > _MAX_VIEW_DIM:
+                pil.thumbnail((_MAX_VIEW_DIM, _MAX_VIEW_DIM), Image.LANCZOS)
+            pil = self._remove_background(pil)
+            # FIX #3: skip views where rembg clearly failed (all-transparent or all-opaque)
+            if pil.mode == "RGBA":
+                alpha = np.array(pil.getchannel("A"))
+                t_frac = (alpha < 10).mean()
+                o_frac = (alpha > 245).mean()
+                if t_frac > 0.95 or o_frac > 0.95:
+                    logger.warning(
+                        "MV view '%s' failed rembg (%.0f%% transparent / %.0f%% opaque) — skipping",
+                        view_name, t_frac * 100, o_frac * 100,
+                    )
+                    continue
+            image_dict[view_name] = pil
 
-        # Each generation is independent — no cross-request parameter modification.
-        _embedding = None
-        _params_hash = None
+        front_image = image_dict.get("front")
+        if front_image is None:
+            raise RuntimeError(
+                "Front view missing or failed background removal. "
+                "Provide a clearer image with a distinct subject."
+            )
+
+        # Shape generation: mv_pipeline primary (1.1B multi-view model, correct for this mode).
+        # Official recommended params: octree_resolution=380, num_chunks=20000.
+        # i23d (mini 0.6B) is fallback only — mv_pipeline produces superior geometry.
+        mesh = None
+        last_error = None
         _attempt = 1
 
-        # Offload other pipelines for MV
-        with self._mv_lock:
-            self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")
-            self._move_to_device("mv_pipeline")
-    
-            generator = torch.Generator(self.device).manual_seed(seed)
+        if self.has_mv:
+            self._ensure_mv_loaded()
+            for _try in range(2):
+                _seed_try = seed + _try * 1000
+                try:
+                    with self._mv_lock:
+                        self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")
+                        self._move_to_device("mv_pipeline")
+                        generator = torch.Generator(self.device).manual_seed(_seed_try)
+                        t0 = time.time()
+                        with torch.inference_mode():
+                            outputs = self.mv_pipeline(
+                                image=image_dict,
+                                num_inference_steps=steps,
+                                guidance_scale=guidance_scale,
+                                generator=generator,
+                                octree_resolution=octree_resolution,
+                                num_chunks=num_chunks,
+                                output_type="mesh",
+                                enable_pbar=False,
+                            )
+                        _meshes = export_to_trimesh(outputs)
+                        _mv_mesh = _meshes[0] if _meshes else None
+                        del outputs
+                        self._offload_to_cpu("mv_pipeline")
+                        self._move_to_device("i23d_pipeline")
+                    if _mv_mesh is not None and len(_mv_mesh.faces) > 500:
+                        mesh = _mv_mesh
+                        _attempt = _try + 1
+                        logger.info("MV shape gen (mv_pipeline) %.1f s, %d faces (attempt %d)",
+                                    time.time() - t0, len(mesh.faces), _attempt)
+                        break
+                    logger.warning("mv_pipeline mesh degenerate (%d faces) — retrying",
+                                   len(_mv_mesh.faces) if _mv_mesh else 0)
+                except Exception as _e:
+                    last_error = _e
+                    logger.warning("mv_pipeline attempt %d failed: %s", _try + 1, _e)
+                    try:
+                        self._offload_to_cpu("mv_pipeline")
+                        self._move_to_device("i23d_pipeline")
+                    except Exception:
+                        pass
+
+        # Fallback: i23d with front image only
+        if mesh is None:
+            logger.info("MV falling back to i23d with front image")
+            for _try in range(2):
+                _seed_try = seed + _try * 1000
+                try:
+                    generator = torch.Generator(self.device).manual_seed(_seed_try)
+                    t0 = time.time()
+                    with torch.inference_mode():
+                        outputs = self.i23d_pipeline(
+                            image=front_image,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance_scale,
+                            generator=generator,
+                            octree_resolution=min(octree_resolution, 192),
+                            num_chunks=num_chunks,
+                            output_type="mesh",
+                            enable_pbar=False,
+                        )
+                    _meshes = export_to_trimesh(outputs)
+                    mesh = _meshes[0] if _meshes else None
+                    del outputs
+                    if mesh is None:
+                        raise RuntimeError("Shape generation produced no mesh.")
+                    _attempt = _try + 1
+                    logger.info("MV i23d fallback %.1f s (attempt %d)", time.time() - t0, _attempt)
+                    break
+                except Exception as _e:
+                    last_error = _e
+                    logger.warning("MV i23d fallback attempt %d failed: %s", _try + 1, _e)
+
+        if mesh is None:
+            raise RuntimeError(f"Multiview shape gen failed. Last error: {last_error}")
+
+        # Mesh cleanup
+        try:
+            _pp_t0 = time.time()
+            mesh = self.floater_remover(mesh)
+            mesh = self.degenerate_face_remover(mesh)
+            mesh = self._keep_largest_component(mesh)
+            import trimesh as _tr
+            _tr.repair.fill_holes(mesh)
+            logger.info("MV mesh cleanup took %.2f s", time.time() - _pp_t0)
+        except Exception as _e:
+            logger.warning("MV mesh cleanup failed (non-fatal): %s", _e)
+
+        # _straighten_straps disabled: Z-flattening causes loss of overall mesh depth
+
+        include_normals = False
+        if texture and self.has_texgen and front_image:
+            self._ensure_texgen_loaded()
+            mesh = self.face_reducer(mesh, max_facenum=face_count)
+            if self._dm.is_gpu:
+                self._offload_to_cpu("i23d_pipeline")
+                self._offload_to_cpu("t2i_pipeline")
             t0 = time.time()
             with torch.inference_mode():
-                outputs = self.mv_pipeline(
-                    image=image_dict,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    octree_resolution=octree_resolution,
-                    num_chunks=num_chunks,
-                    output_type="mesh",
-                    enable_pbar=False,
-                )
-            mesh = export_to_trimesh(outputs)[0]
-            logger.info("MV shape gen took %.1f s", time.time() - t0)
-    
-            # Clean mesh: remove floaters + degenerate faces + keep largest component
-            try:
-                _pp_t0 = time.time()
-                mesh = self.floater_remover(mesh)
-                mesh = self.degenerate_face_remover(mesh)
-                mesh = self._keep_largest_component(mesh)
-                logger.info("MV mesh cleanup took %.2f s", time.time() - _pp_t0)
-            except Exception as _e:
-                logger.warning("MV mesh cleanup failed (non-fatal): %s", _e)
-    
-            include_normals = False
-            front_image = image_dict.get("front")
-            if texture and self.has_texgen and front_image:
-                self._ensure_texgen_loaded()
-                mesh = self.face_reducer(mesh, max_facenum=face_count)
-                self._offload_to_cpu("mv_pipeline")
-                t0 = time.time()
-                # Pass all user-provided views so texgen can substitute real back/left/right
-                # images instead of hallucinating them from the front image alone.
+                # Pass all validated views so texgen uses real back/left/right images
+                # instead of hallucinating them from the front image alone.
                 mesh = self.texgen_pipeline(mesh, front_image, user_views=image_dict)
-                logger.info("Texture gen took %.1f s", time.time() - t0)
-                include_normals = True
-    
-            # Restore primary pipeline
-            self._offload_to_cpu("mv_pipeline")
-            self._move_to_device("i23d_pipeline")
-    
-        result = self._export_mesh(mesh, uid, out_type, include_normals)
+            logger.info("MV texture gen took %.1f s", time.time() - t0)
+            if self._dm.is_gpu:
+                self._move_to_device("i23d_pipeline")
+            include_normals = True
 
-        # --- Vector cache store (with attempt tracking) ---
+        result = self._export_mesh(mesh, uid, out_type, include_normals)
         result["attempt"] = _attempt
         result["generation_time"] = round(time.time() - _t_start, 1)
-        if self.vector_store is not None and _embedding is not None and _params_hash is not None:
-            if _attempt > 1:
-                prev = self.vector_store.search(_embedding, _params_hash)
-                if prev:
-                    self.vector_store.delete(prev["id"])
-            self.vector_store.store(_embedding, _params_hash, result, metadata={"source": "multiview-to-3d"})
 
         empty_cache()
         return result
@@ -903,6 +1022,7 @@ class Hunyuan3DService:
         image = self.t2i_pipeline(prompt, seed=seed, num_inference_steps=t2i_steps)
         logger.info("Retexture: t2i took %.1f s", time.time() - _t_start)
         self._offload_to_cpu("t2i_pipeline")
+        empty_cache()  # flush MPS cache so texgen can allocate large attention buffers
 
         clean_image = self._remove_background(image)
 

@@ -14,8 +14,36 @@ def parse_document_node(state: Pipeline3DState) -> dict:
     return {
         "raw_text": parsed.get("content", ""),
         "parsed_content": parsed,
-        "current_step": "extract_spec_llm",
+        "current_step": "validate_parsed_document",
         "errors": [],
+    }
+
+
+def validate_parsed_document_node(state: Pipeline3DState) -> dict:
+    """Sanity-check the parsed document before sending it to the LLM.
+
+    Records warnings into state.errors if the parsed text is suspiciously
+    short or empty (typical signs of OCR failure / unsupported format).
+    Does NOT terminate the pipeline — the LLM will still get a chance and
+    the fallback spec covers the case where extraction completely fails.
+    Surfacing the parse problem in the error log makes the root cause
+    visible instead of being buried behind 3 LLM retries.
+    """
+    text = (state.get("raw_text") or "").strip()
+    parsed = state.get("parsed_content") or {}
+    warnings = []
+    if len(text) < 20:
+        warnings.append(
+            f"Parsed document is very short ({len(text)} chars) — likely empty,"
+            " image-only, or OCR failure. LLM extraction may not produce useful spec."
+        )
+    if not parsed:
+        warnings.append("Parsed content dict is empty — document parser returned no metadata.")
+    if warnings:
+        logger.warning("Pipeline: validate_parsed_document raised %d warning(s)", len(warnings))
+    return {
+        "current_step": "spec_extraction",
+        "errors": warnings,
     }
 
 

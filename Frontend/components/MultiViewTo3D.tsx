@@ -40,9 +40,9 @@ const VIEW_HINTS: Record<ViewName, { tips: string[] }> = {
 };
 
 const PRESETS = {
-  fast:     { steps: 5,  octreeResolution: 64,  faceCount: 10000 },
-  balanced: { steps: 10, octreeResolution: 128, faceCount: 20000 },
-  quality:  { steps: 20, octreeResolution: 192, faceCount: 40000 },
+  fast:     { steps: 5,  octreeResolution: 128, faceCount: 10000 },
+  balanced: { steps: 20, octreeResolution: 256, faceCount: 40000 },
+  quality:  { steps: 50, octreeResolution: 380, faceCount: 60000 },
 } as const;
 
 const ViewHint: React.FC<{ view: ViewName }> = ({ view }) => {
@@ -121,14 +121,14 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
   const [error, setError] = useState<string | null>(null);
   // Basic params
   const [texture, setTexture] = useState(false);
-  const [steps, setSteps] = useState(10);
+  const [steps, setSteps] = useState(20);
   const [outputType, setOutputType] = useState('glb');
   // Advanced params
   const [seed, setSeed] = useState(1234);
   const [guidanceScale, setGuidanceScale] = useState(5.0);
-  const [octreeResolution, setOctreeResolution] = useState(128);
+  const [octreeResolution, setOctreeResolution] = useState(256);
   const [numChunks, setNumChunks] = useState(50000);
-  const [faceCount, setFaceCount] = useState(20000);
+  const [faceCount, setFaceCount] = useState(40000);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [activePreset, setActivePreset] = useState<'fast' | 'balanced' | 'quality' | null>('balanced');
   // UI
@@ -454,7 +454,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
           <div className="space-y-4">
             {result ? (
               <>
-                <ModelViewer3D src={result.previewUrl} />
+                <ModelViewer3D src={result.previewUrl} cameraOrbit="0deg 75deg 105%" />
                 {generationTime != null && (
                   <div className="text-center text-sm text-theme-muted font-mono">Generated in {generationTime}s</div>
                 )}

@@ -9,5 +9,6 @@ namespace ThreeDGenerator.Editor
         public string url;
         public string scene;
         public string name;
+        public bool hasTexture;
     }
 }

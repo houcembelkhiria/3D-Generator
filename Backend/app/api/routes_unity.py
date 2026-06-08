@@ -227,6 +227,7 @@ class _SpawnBody(BaseModel):
     scene: str = "existing"
     id: str = ""
     name: str = ""
+    has_texture: bool = False
 
 
 @router.post("/spawn")
@@ -251,6 +252,7 @@ def spawn_model(body: _SpawnBody):
         "url": body.url,
         "scene": body.scene if body.scene in ("new", "existing") else "existing",
         "name": body.name[:60],
+        "hasTexture": body.has_texture,
     }
     req_file.write_text(json.dumps(data))
 

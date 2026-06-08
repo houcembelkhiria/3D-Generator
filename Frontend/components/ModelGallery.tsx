@@ -30,6 +30,7 @@ const spawnViaApi = async (model: GeneratedModel, scene: UnityScene): Promise<vo
       scene,
       id: model.id,
       name: (model.prompt ?? model.id).slice(0, 60),
+      has_texture: model.hasTexture ?? false,
     }),
   });
   if (!r.ok) {

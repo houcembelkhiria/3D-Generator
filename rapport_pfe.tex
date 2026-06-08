@@ -530,23 +530,65 @@ proposant un pipeline de bout en bout, intégré directement à Unity.
 
 \subsection{Solutions de génération 3D}
 
-\begin{table}[H]
-\centering
+Les principales solutions de génération 3D depuis une image ou un texte sont
+comparées ci-dessous selon leur architecture, leurs performances matérielles et
+leurs limites pratiques.
+
+{\footnotesize\renewcommand{\arraystretch}{1.2}
+\begin{longtable}{@{}p{2.3cm}p{2.2cm}p{1.3cm}p{1.1cm}p{2.6cm}p{3.8cm}@{}}
 \caption{Comparatif des solutions de génération 3D existantes}
-\label{tab:existant}
-\begin{tabularx}{\linewidth}{@{}p{2.8cm}p{3cm}p{3cm}p{4.5cm}@{}}
+\label{tab:existant}\\
 \toprule
 \theadrow
-\textbf{Outil} & \textbf{Approche} & \textbf{Avantages} & \textbf{Limites} \\
+\textbf{Outil} & \textbf{Approche} & \textbf{Temps} & \textbf{VRAM} &
+\textbf{Points forts} & \textbf{Limites / Contraintes} \\
 \midrule
-TripoSR              & NeRF/Transformer   & Rapide ($<$2 s)       & Qualité limitée \\
-Shap·E               & Diffusion implicite & Open-source          & Maillage grossier \\
-Meshy.ai             & API cloud          & Simple d'usage        & Payant, latence réseau \\
-Zero123++            & Diffusion multi-vues& Bonne précision      & GPU haute gamme requis \\
-\textbf{Hunyuan3D-2}~\cite{hunyuan3d2024} & DiT + VAE 3D & Haute qualité, texture & 8 GB RAM minimum \\
+\endfirsthead
+\toprule
+\theadrow
+\textbf{Outil} & \textbf{Approche} & \textbf{Temps} & \textbf{VRAM} &
+\textbf{Points forts} & \textbf{Limites / Contraintes} \\
+\midrule
+\endhead
 \bottomrule
-\end{tabularx}
-\end{table}
+\endlastfoot
+
+TripoSR~\cite{triposr}
+  & NeRF / Transformer & $<$2\,s & 4\,Go
+  & Ultra-rapide, open source
+  & Qualité géom. faible, artefacts sur faces cachées \\[2pt]
+InstantMesh~\cite{instantmesh}
+  & LRM sparse-view & $\sim$10\,s & 8\,Go
+  & Équilibre qualité / vitesse, open source
+  & Texture limitée, pas de PBR \\[2pt]
+Point-E~\cite{pointe}
+  & Diffusion nuage de points & $\sim$10\,s & 6\,Go
+  & Text-to-3D, open source
+  & Résolution très faible, maillage approximatif \\[2pt]
+Shap-E~\cite{shape_e}
+  & Diffusion implicite & $\sim$15\,s & 8\,Go
+  & Text-to-3D natif, open source
+  & Maillage grossier, pas de texture PBR \\[2pt]
+Zero123++~\cite{zero123pp}
+  & Diffusion multi-vues & $\sim$30\,s & 12\,Go
+  & Bonne précision géométrique
+  & GPU haute gamme requis, pas de pipeline texte \\[2pt]
+Meshy.ai
+  & API cloud propriétaire & Variable & Cloud
+  & Interface simple, PBR supporté
+  & Payant, données transmises vers serveurs tiers \\[2pt]
+Luma AI Genie
+  & Diffusion vidéo / 3D & Variable & Cloud
+  & Qualité visuelle élevée
+  & Cloud uniquement, pas d'API libre, payant \\[4pt]
+\midrule
+\textbf{Notre système}~\cite{hunyuan3d2024}
+  & \textbf{DiT + VAE 3D (Hunyuan3D) + LangGraph}
+  & \textbf{45\,s -- 4\,min} & \textbf{5--6\,Go}
+  & \textbf{Multi-modal, PBR, Unity, PDF$\rightarrow$3D, cache vect.}
+  & Génération plus lente ; GPU requis \\
+\end{longtable}
+}
 
 \subsection{Architecture de l'intégration Unity Editor}
 L'intégration Unity repose sur une architecture client/serveur légère :
@@ -557,12 +599,63 @@ Le transport retenu est un dossier de fichiers JSON partagés (\texttt{SpawnRequ
 supporté par Unity Editor.
 
 \subsection{Positionnement du projet}
-\begin{itemize}
-  \item Pipeline \textbf{local} (sans API cloud payante).
-  \item Trois modes : Image-to-3D, Text-to-3D, Multi-vues-to-3D.
-  \item Injection automatique dans Unity via API REST (aucun clic requis).
-  \item Cache vectoriel ChromaDB pour éviter les régénérations inutiles.
-\end{itemize}
+\label{sec:positionnement}
+
+La matrice ci-dessous compare les capacités fonctionnelles de notre système face
+aux solutions existantes. Les critères en \textbf{gras} représentent des
+contributions originales absentes de l'écosystème open-source actuel.
+
+{%
+\def\yes{{\color{crispgreen}\checkmark}}%
+\def\no{{\color{red!60}$\times$}}%
+\def\pt{{\color{orange!70}$\sim$}}%
+\footnotesize\renewcommand{\arraystretch}{1.35}%
+\begin{table}[H]
+\centering
+\caption{Matrice de positionnement — critères différenciants}
+\label{tab:positionnement}
+\begin{tabular}{@{}p{4.1cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\columncolor{tekupblue!10}\centering\arraybackslash}p{1.35cm}@{}}
+\toprule
+\theadrow
+\textbf{Critère} &
+\makecell[c]{\textbf{Tripo}\\\textbf{SR}} &
+\makecell[c]{\textbf{Instant}\\\textbf{Mesh}} &
+\textbf{Shap-E} &
+\makecell[c]{\textbf{Zero}\\\textbf{123++}} &
+\textbf{Meshy} &
+\makecell[c]{\bfseries\color{tekupblue}Notre\\syst.} \\
+\midrule
+Open source                              & \yes & \yes & \yes & \yes & \no  & \yes \\
+Exécution locale                         & \yes & \yes & \yes & \yes & \no  & \yes \\
+Image $\rightarrow$ 3D                   & \yes & \yes & \pt  & \yes & \yes & \yes \\
+Texte $\rightarrow$ 3D                   & \no  & \no  & \yes & \no  & \yes & \yes \\
+Multi-vues $\rightarrow$ 3D              & \no  & \yes & \no  & \yes & \yes & \yes \\
+\textbf{Document PDF $\rightarrow$ 3D}  & \no  & \no  & \no  & \no  & \no  & \textbf{\yes} \\
+Matériaux PBR                            & \no  & \pt  & \no  & \no  & \yes & \yes \\
+\textbf{Intégration Unity Editor}       & \no  & \no  & \no  & \no  & \no  & \textbf{\yes} \\
+\textbf{Cache vectoriel}                & \no  & \no  & \no  & \no  & \no  & \textbf{\yes} \\
+API REST asynchrone                      & \no  & \no  & \no  & \no  & \yes & \yes \\
+\textbf{Pipeline agentique (LangGraph)} & \no  & \no  & \no  & \no  & \no  & \textbf{\yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+}
+
+Notre système se distingue par \textbf{quatre contributions absentes} de toutes
+les solutions recensées : (1)~un pipeline automatique \textbf{document PDF /
+email $\rightarrow$ asset 3D}, sans intervention manuelle grâce à LangGraph et
+un LLM local ; (2)~une \textbf{injection directe dans Unity Editor} via un
+protocole JSON partagé, sans dépendance réseau ; (3)~un \textbf{cache vectoriel}
+(ChromaDB + embeddings CLIP/DINO) éliminant les régénérations redondantes ;
+et (4)~un \textbf{pipeline agentique} orchestrant l'ensemble du workflow de
+façon autonome. Ces capacités font de ce microservice un outil de production
+directement intégrable dans un contexte de développement de jeu vidéo.
 
 \section{Objectifs et critères de succès}
 
@@ -1102,6 +1195,98 @@ les interactions entre les cinq composants du système.
 \end{figure}
 
 \section{Modèles IA retenus}
+\label{sec:modeles-ia}
+
+Le pipeline Hunyuan3D s'appuie sur une famille de modèles spécialisés couvrant l'intégralité
+du traitement : de la génération de forme brute jusqu'à la synthèse de matériaux physiquement
+réalistes (PBR), en passant par le prétraitement d'image et la reconstruction de scènes
+immersives. Le tableau~\ref{tab:modeles-hunyuan} en dresse la vue d'ensemble comparative,
+regroupée par rôle fonctionnel.
+
+{\renewcommand{\arraystretch}{1.2}\footnotesize
+\begin{longtable}{@{}p{3.5cm}p{1.6cm}p{1.0cm}p{1.0cm}p{2.8cm}p{3.5cm}@{}}
+\caption{Famille des modèles Hunyuan3D — vue d'ensemble}
+\label{tab:modeles-hunyuan}\\
+\toprule
+\theadrow
+\textbf{Modèle} & \textbf{Rôle principal} & \textbf{Param.} &
+\textbf{VRAM min.} & \textbf{Entrées / Sorties} &
+\textbf{Architecture \& spécificités} \\
+\midrule
+\endfirsthead
+\multicolumn{6}{c}{\itshape (suite — Famille des modèles Hunyuan3D)}\\[2pt]
+\toprule
+\theadrow
+\textbf{Modèle} & \textbf{Rôle principal} & \textbf{Param.} &
+\textbf{VRAM min.} & \textbf{Entrées / Sorties} &
+\textbf{Architecture \& spécificités} \\
+\midrule
+\endhead
+\multicolumn{6}{r}{\itshape Suite page suivante $\rightarrow$}
+\endfoot
+\bottomrule
+\endlastfoot
+
+%% ---- Génération de formes ----
+\multicolumn{6}{l}{\bfseries\color{tekupblue}%
+  Génération de formes (Hunyuan3D-DiT / Shape)} \\[2pt]
+Hunyuan3D-DiT-v2-0
+  & Génération de formes & 1,1\,B & $\sim$6\,Go
+  & Image / Texte $\rightarrow$ Maillage 3D (.glb, .obj)
+  & \textit{Flow-based Diffusion Transformer} ; modèle de base pour la géométrie. \\[2pt]
+Hunyuan3D-DiT-v2-0-Fast
+  & Génération de formes & 1,1\,B & $\sim$6\,Go
+  & Image / Texte $\rightarrow$ Maillage 3D
+  & Distillation \textit{Guidance} : inférence $2\times$ plus rapide que le Standard. \\[2pt]
+Hunyuan3D-DiT-v2-0-Turbo
+  & Génération de formes & 1,1\,B & $\sim$6\,Go
+  & Image / Texte $\rightarrow$ Maillage 3D
+  & Distillation \textit{Step} (FlashVDM) : étapes de calcul réduites drastiquement. \\[2pt]
+Hunyuan3D-DiT-v2-mini (Std / Fast / Turbo)
+  & Génération de formes & 0,6\,B & $\sim$5\,Go
+  & Image / Texte $\rightarrow$ Maillage 3D
+  & Version allégée, optimisée GPU grand public à mémoire contrainte. \\[2pt]
+Hunyuan3D-DiT-v2-mv (Std / Fast / Turbo)
+  & Génération multi-vues & 1,1\,B & $\sim$6\,Go
+  & Images multi-angles $\rightarrow$ Maillage 3D
+  & Angles traités simultanément ; supprime les artefacts sur faces cachées. \\[2pt]
+Hunyuan3D-Shape-v2-1 (LATTICE)
+  & Haute fidélité & 3,3\,B & $\sim$10\,Go
+  & Image $\rightarrow$ Maillage haute densité
+  & Représentation hybride \textbf{VoxSet} (Voxel + Vector Set) ; surfaces ultra-lisses. \\[4pt]
+\midrule
+
+%% ---- Texture / Matériaux ----
+\multicolumn{6}{l}{\bfseries\color{tekupblue}%
+  Synthèse de textures et matériaux (Hunyuan3D-Paint)} \\[2pt]
+Hunyuan3D-Paint-v2-0 (\& Turbo)
+  & Textures RGB & 1,3\,B & $\sim$10\,Go
+  & Maillage + Image $\rightarrow$ Texture RGB
+  & Priors de diffusion géométrique ; coloriage sans coutures sur maillage vierge. \\[2pt]
+Hunyuan3D-Paint-v2-1
+  & Matériaux PBR & 2,0\,B & $\sim$21\,Go
+  & Maillage + Image (sans ombre) $\rightarrow$ Cartes PBR
+  & Attention multi-vues + RoPE 3D ; génère Albédo, Métallique, Rugosité, Normales. \\[2pt]
+Hunyuan3D-Delight-v2-0
+  & Prétraite\-ment image & 1,3\,B & Variable
+  & Image brute $\rightarrow$ Image d'albédo
+  & Suppression mathématique des ombres portées et des reflets lumineux. \\[4pt]
+\midrule
+
+%% ---- Scènes immersives ----
+\multicolumn{6}{l}{\bfseries\color{tekupblue}%
+  Reconstruction et scènes immersives (HunyuanWorld)} \\[2pt]
+HunyuanWorld-1.0
+  & Scènes immersives & N/A & Variable
+  & Image / Texte + labels sémantiques $\rightarrow$ Monde interactif (DRC)
+  & Panoramas 360° en couches maillées via \textit{onion-peeling} ; premier plan / arrière-plan interactifs. \\[2pt]
+HunyuanWorld-Mirror
+  & Recons\-truction
+    univer\-selle & N/A & Variable
+  & Vidéo / Image + priors $\rightarrow$ Gaussiennes 3D / Nuages de points
+  & Modèle \textit{feed-forward} ; profondeur, normales et paramètres caméra extraits en un seul passage. \\
+\end{longtable}
+}
 
 \begin{table}[H]
 \centering

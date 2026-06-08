@@ -73,6 +73,7 @@ export interface GeneratedModel {
   generationTime?: number;
   faceCount?: number;
   fileSizeMb?: number;
+  hasTexture?: boolean;
 }
 
 export type AppView = 'agent' | 'files' | 'settings' | 'image-to-3d' | 'text-to-3d' | 'multiview-to-3d' | 'gallery';

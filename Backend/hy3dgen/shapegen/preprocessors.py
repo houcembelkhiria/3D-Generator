@@ -57,8 +57,15 @@ class ImageProcessorV2:
         size = max(H, W)
         result = np.zeros((size, size, C), dtype=np.uint8)
 
-        coords = np.nonzero(mask > 10)  # ignore near-transparent rembg artifact pixels
-        if coords[0].size == 0:
+        # Use well-opaque pixels for bounds so rembg edge noise
+        # doesn't shift the bounding-box centre off the real object.
+        coords = None
+        for _t in (128, 10, 0):
+            _c = np.nonzero(mask > _t)
+            if _c[0].size >= 10:
+                coords = _c
+                break
+        if coords is None:
             coords = np.nonzero(mask)
         x_min, x_max = coords[0].min(), coords[0].max()
         y_min, y_max = coords[1].min(), coords[1].max()
@@ -138,14 +145,54 @@ class MVImageProcessorV2(ImageProcessorV2):
         if self.border_ratio is not None:
             border_ratio = self.border_ratio
 
+        # ── BGR→RGB normalisation + measure per-view object extent ──────
+        normalised: dict = {}
+        view_obj_dims: dict = {}
+        for view_tag, image in image_dict.items():
+            if isinstance(image, Image.Image):
+                img_np = np.asarray(image.convert("RGBA"))
+            elif isinstance(image, np.ndarray):
+                # OpenCV gives BGR; ensure RGB so colours are faithful
+                if image.shape[-1] == 4:
+                    img_np = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
+                elif image.shape[-1] == 3:
+                    img_np = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                else:
+                    img_np = image
+            else:
+                img_np = np.asarray(image)
+            normalised[view_tag] = img_np
+            alpha = img_np[..., 3] if img_np.shape[-1] == 4 else (
+                np.ones(img_np.shape[:2], dtype=np.uint8) * 255)
+            for _t in (128, 10):
+                _c = np.nonzero(alpha > _t)
+                if _c[0].size >= 10:
+                    h = int(_c[0].max() - _c[0].min())
+                    w = int(_c[1].max() - _c[1].min())
+                    view_obj_dims[view_tag] = max(h, w)
+                    break
+
+        # Use front view as scale reference so back/side views aren't
+        # inflated when they show more context (e.g. full strap length).
+        ref_dim = view_obj_dims.get('front') or (
+            max(view_obj_dims.values()) if view_obj_dims else 0)
+        desired = int(self.size * (1 - border_ratio))
+        shared_scale = desired / ref_dim if ref_dim > 0 else None
+
         images = []
         masks = []
         view_idxs = []
         for idx, (view_tag, image) in enumerate(image_dict.items()):
             view_idxs.append(self.view2idx[view_tag])
-            image, mask = self.load_image(image, border_ratio=border_ratio, to_tensor=to_tensor)
-            images.append(image)
-            masks.append(mask)
+            if shared_scale is not None:
+                image_t, mask_t = self._load_with_shared_scale(
+                    normalised[view_tag], shared_scale=shared_scale,
+                    to_tensor=to_tensor)
+            else:
+                image_t, mask_t = self.load_image(
+                    image, border_ratio=border_ratio, to_tensor=to_tensor)
+            images.append(image_t)
+            masks.append(mask_t)
 
         zipped_lists = zip(view_idxs, images, masks)
         sorted_zipped_lists = sorted(zipped_lists)
@@ -159,6 +206,63 @@ class MVImageProcessorV2(ImageProcessorV2):
             'view_idxs': view_idxs
         }
         return outputs
+
+    def _load_with_shared_scale(self, img_np: np.ndarray, shared_scale: float,
+                                 to_tensor: bool):
+        """Place object on white canvas using a globally consistent scale.
+
+        Bounds are detected with alpha>128 to ignore rembg edge noise, then
+        the object is scaled uniformly (aspect-ratio preserved) and centred.
+        """
+        if img_np.shape[-1] == 4:
+            alpha = img_np[..., 3]
+        else:
+            alpha = np.ones(img_np.shape[:2], dtype=np.uint8) * 255
+            img_np = np.concatenate([img_np, alpha[..., np.newaxis]], axis=-1)
+
+        coords = None
+        for _t in (128, 10, 0):
+            _c = np.nonzero(alpha > _t)
+            if _c[0].size >= 10:
+                coords = _c
+                break
+        if coords is None:
+            coords = np.nonzero(alpha)
+
+        x_min, x_max = int(coords[0].min()), int(coords[0].max())
+        y_min, y_max = int(coords[1].min()), int(coords[1].max())
+        obj = img_np[x_min:x_max + 1, y_min:y_max + 1]
+        oh, ow = obj.shape[:2]
+
+        # Cap scale uniformly so aspect ratio is preserved when object
+        # would exceed the canvas on either axis.
+        effective_scale = shared_scale
+        if oh * shared_scale > self.size or ow * shared_scale > self.size:
+            effective_scale = min(self.size / oh, self.size / ow)
+        new_h = max(int(oh * effective_scale), 1)
+        new_w = max(int(ow * effective_scale), 1)
+
+        obj_r = cv2.resize(obj, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        canvas = np.ones((self.size, self.size, 4), dtype=np.uint8)
+        canvas[..., :3] = 255
+        canvas[..., 3] = 255
+        x_off = (self.size - new_h) // 2
+        y_off = (self.size - new_w) // 2
+        canvas[x_off:x_off + new_h, y_off:y_off + new_w] = obj_r
+
+        a = canvas[..., 3:].astype(np.float32) / 255.0
+        rgb = (canvas[..., :3] * a + 255.0 * (1.0 - a)).clip(0, 255).astype(np.uint8)
+        msk = canvas[..., 3]
+
+        rgb = cv2.resize(rgb, (self.size, self.size), interpolation=cv2.INTER_CUBIC)
+        msk = cv2.resize(msk, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
+        msk = msk[..., np.newaxis]
+
+        if to_tensor:
+            rgb = array_to_tensor(rgb)
+            msk = array_to_tensor(msk)
+        return rgb, msk
 
 
 IMAGE_PROCESSORS = {

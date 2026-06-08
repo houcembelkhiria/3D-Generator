@@ -33,10 +33,14 @@ CREATE TABLE IF NOT EXISTS models (
     generation_time REAL,
     face_count     INTEGER,
     file_size_mb   REAL,
-    format         TEXT    DEFAULT 'glb'
+    format         TEXT    DEFAULT 'glb',
+    has_texture    INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_created ON models(created_at DESC);
 """
+
+
+_MIGRATE_SQL = "ALTER TABLE models ADD COLUMN has_texture INTEGER DEFAULT 0;"
 
 
 def _connect() -> sqlite3.Connection:
@@ -51,6 +55,12 @@ def _init() -> None:
         conn = _connect()
         conn.executescript(_CREATE_SQL)
         conn.commit()
+        # Add new columns if upgrading from older schema
+        try:
+            conn.execute(_MIGRATE_SQL)
+            conn.commit()
+        except Exception:
+            pass  # column already exists
         conn.close()
     _migrate_from_json()
 
@@ -101,6 +111,7 @@ def insert(
     face_count: int | None = None,
     file_size_mb: float | None = None,
     fmt: str = "glb",
+    has_texture: bool = False,
 ) -> None:
     if not created_at:
         created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -110,11 +121,11 @@ def insert(
             """
             INSERT OR REPLACE INTO models
               (uid, prompt, source, preview_url, download_url,
-               created_at, generation_time, face_count, file_size_mb, format)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+               created_at, generation_time, face_count, file_size_mb, format, has_texture)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """,
             (uid, prompt, source, preview_url, download_url,
-             created_at, generation_time, face_count, file_size_mb, fmt),
+             created_at, generation_time, face_count, file_size_mb, fmt, int(has_texture)),
         )
         conn.commit()
         conn.close()
