@@ -75,8 +75,18 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
         }),
       });
       if (!submitRes.ok) {
-        const err = await submitRes.json();
-        throw new Error(err.detail || `HTTP ${submitRes.status}`);
+        const err = await submitRes.json().catch(() => ({}));
+        let msg: string;
+        if (Array.isArray(err?.detail)) {
+          msg = err.detail.map((d: any) => d?.msg ?? JSON.stringify(d)).join('; ');
+        } else if (typeof err?.detail === 'string') {
+          msg = err.detail;
+        } else if (err?.message) {
+          msg = err.message;
+        } else {
+          msg = `HTTP ${submitRes.status}`;
+        }
+        throw new Error(msg);
       }
       const { uid } = await submitRes.json();
       currentUidRef.current = uid;
@@ -182,8 +192,8 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
                     className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
                     <option value={64}>64 — fastest</option>
                     <option value={128}>128 — default</option>
-                    <option value={256}>256 — detailed</option>
-                    <option value={384}>384 — high quality</option>
+                    <option value={160}>160 — detailed</option>
+                    <option value={192}>192 — high quality</option>
                   </select>
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-theme-secondary">

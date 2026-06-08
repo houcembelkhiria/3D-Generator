@@ -632,6 +632,16 @@ class Hunyuan3DService:
             )
         logger.info("Shape gen took %.1f s", time.time() - t0)
 
+        # Clean mesh: remove tiny disconnected floaters + degenerate faces.
+        # These postprocessors were instantiated but never called — free quality win.
+        try:
+            _pp_t0 = time.time()
+            mesh = self.floater_remover(mesh)
+            mesh = self.degenerate_face_remover(mesh)
+            logger.info("Mesh cleanup took %.2f s", time.time() - _pp_t0)
+        except Exception as _e:
+            logger.warning("Mesh cleanup failed (non-fatal): %s", _e)
+
         include_normals = False
         if texture and self.has_texgen:
             self._ensure_texgen_loaded()
@@ -769,6 +779,8 @@ class Hunyuan3DService:
         else:
             # FIRST ATTEMPT — full t2i + shape gen
             _t_start = time.time()
+            # Move t2i back to device (may have been offloaded to CPU after previous run)
+            self._move_to_device("t2i_pipeline")
             t0 = time.time()
             image = self.t2i_pipeline(text, seed=seed)
             logger.info("Text-to-image took %.1f s (attempt #1)", time.time() - t0)
@@ -919,6 +931,15 @@ class Hunyuan3DService:
             )
         mesh = export_to_trimesh(outputs)[0]
         logger.info("MV shape gen took %.1f s", time.time() - t0)
+
+        # Clean mesh: remove floaters + degenerate faces
+        try:
+            _pp_t0 = time.time()
+            mesh = self.floater_remover(mesh)
+            mesh = self.degenerate_face_remover(mesh)
+            logger.info("MV mesh cleanup took %.2f s", time.time() - _pp_t0)
+        except Exception as _e:
+            logger.warning("MV mesh cleanup failed (non-fatal): %s", _e)
 
         include_normals = False
         front_image = image_dict.get("front")
