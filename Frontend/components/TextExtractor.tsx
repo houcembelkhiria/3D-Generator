@@ -1,4 +1,5 @@
 import React, { useState, useRef, ChangeEvent, useEffect } from 'react';
+import { GeneratedModel } from '../types';
 import { API_BASE } from '../api';
 
 interface TextExtractionResult {
@@ -9,6 +10,7 @@ interface TextExtractionResult {
 
 interface TextExtractorProps {
   onExtractComplete?: (result: TextExtractionResult) => void;
+  onModelGenerated?: (model: GeneratedModel) => void;
 }
 
 interface ToastNotification {
@@ -17,7 +19,7 @@ interface ToastNotification {
   type: 'success' | 'error' | 'info' | 'warning';
 }
 
-export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete }) => {
+export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete, onModelGenerated }) => {
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<TextExtractionResult | null>(null);
@@ -25,6 +27,9 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
   const [dragActive, setDragActive] = useState(false);
   const [progress, setProgress] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
+  // 3D generation from document
+  const [generating3D, setGenerating3D] = useState(false);
+  const [gen3DError, setGen3DError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addToast = (message: string, type: ToastNotification['type'] = 'info') => {
@@ -34,8 +39,6 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
       type
     };
     setToasts(prev => [...prev, toast]);
-    
-    // Auto-remove toast after 3 seconds
     setTimeout(() => {
       removeToast(toast.id);
     }, 3000);
@@ -68,38 +71,32 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
   };
 
   const validateAndSetFile = (file: File) => {
-    // File type validation - accept both PDF and EML files
     const validTypes = ['application/pdf', 'message/rfc822'];
     if (!validTypes.includes(file.type)) {
       setError('Please select a PDF or EML file.');
       addToast('Unsupported file type. Please select a PDF or EML file.', 'error');
       return;
     }
-    
-    // File size validation (50MB limit)
-    const maxSize = 50 * 1024 * 1024; // 50MB
+    const maxSize = 50 * 1024 * 1024;
     if (file.size > maxSize) {
       const errorMessage = `File is too large. Maximum size is 50MB. Your file is ${(file.size / (1024 * 1024)).toFixed(1)}MB.`;
       setError(errorMessage);
       addToast(errorMessage, 'error');
       return;
     }
-    
-    // Show file type detection toast
     const fileTypeDesc = getFileTypeDescription(file);
     addToast(`📁 ${fileTypeDesc} detected: ${file.name}`, 'success');
-    
     setFile(file);
     setError(null);
     setResult(null);
     setProgress(0);
+    setGen3DError(null);
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       validateAndSetFile(e.dataTransfer.files[0]);
     }
@@ -120,34 +117,26 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
       setError('Please select a PDF or EML file first.');
       return;
     }
-
     setIsLoading(true);
     setError(null);
     setResult(null);
     setProgress(0);
-
     try {
       const formData = new FormData();
       formData.append('file', file);
-
-      // Simulate progress for better UX
       const progressInterval = setInterval(() => {
         setProgress(prev => Math.min(prev + 10, 90));
       }, 200);
-
       const response = await fetch(`${API_BASE}/api/v1/extract-text/`, {
         method: 'POST',
         body: formData,
       });
-
       clearInterval(progressInterval);
       setProgress(100);
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to extract text from document');
       }
-
       const data: TextExtractionResult = await response.json();
       setResult(data);
     } catch (err) {
@@ -156,6 +145,65 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
     } finally {
       setIsLoading(false);
       setProgress(0);
+    }
+  };
+
+  const handleGenerate3D = async () => {
+    if (!file) return;
+    setGenerating3D(true);
+    setGen3DError(null);
+    addToast('Starting 3D generation from document…', 'info');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${API_BASE}/api/v1/run-pipeline`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const { task_id } = await res.json();
+      addToast('Pipeline started, polling for result…', 'info');
+
+      // Poll until done
+      let data: any = null;
+      for (let attempt = 0; attempt < 120; attempt++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const pollRes = await fetch(`${API_BASE}/api/v1/task/${task_id}`);
+        if (!pollRes.ok) throw new Error(`Poll failed: HTTP ${pollRes.status}`);
+        const poll = await pollRes.json();
+        if (poll.status === 'completed') { data = poll; break; }
+        if (poll.status === 'failed') throw new Error(poll.result?.error || 'Pipeline failed');
+      }
+      if (!data) throw new Error('Pipeline timed out');
+
+      const modelResult = data.result;
+      const model: GeneratedModel = {
+        id: task_id,
+        previewUrl: modelResult?.preview_url?.startsWith('http')
+          ? modelResult.preview_url
+          : `${API_BASE}${modelResult?.preview_url ?? ''}`,
+        downloadUrl: modelResult?.download_url?.startsWith('http')
+          ? modelResult.download_url
+          : `${API_BASE}${modelResult?.download_url ?? ''}`,
+        format: modelResult?.format ?? 'glb',
+        source: 'image-to-3d',
+        prompt: file.name,
+        createdAt: new Date().toISOString(),
+        fromCache: modelResult?.from_cache ?? false,
+        generationTime: modelResult?.generation_time,
+        faceCount: modelResult?.face_count,
+        fileSizeMb: modelResult?.file_size_mb,
+      };
+      onModelGenerated?.(model);
+      addToast('3D model generated and added to gallery!', 'success');
+    } catch (e: any) {
+      setGen3DError(e.message);
+      addToast(`3D generation failed: ${e.message}`, 'error');
+    } finally {
+      setGenerating3D(false);
     }
   };
 
@@ -168,6 +216,7 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
     setResult(null);
     setError(null);
     setProgress(0);
+    setGen3DError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -177,6 +226,7 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
     setResult(null);
     setFile(null);
     setProgress(0);
+    setGen3DError(null);
   };
 
   const formatFileSize = (bytes: number): string => {
@@ -349,6 +399,42 @@ export const TextExtractor: React.FC<TextExtractorProps> = ({ onExtractComplete 
                   <p className="mt-2 text-sm text-green-400">File: {result.filename}</p>
                   {result.message && (
                     <p className="mt-1 text-sm text-yellow-400 italic">{result.message}</p>
+                  )}
+
+                  {/* Generate 3D from document button */}
+                  {file && onModelGenerated && (
+                    <div className="mt-4">
+                      <button
+                        onClick={handleGenerate3D}
+                        disabled={generating3D}
+                        className={`w-full px-4 py-2.5 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${
+                          generating3D
+                            ? 'bg-[#7C3AED]/40 text-white/60 cursor-not-allowed'
+                            : 'bg-[#7C3AED] hover:bg-[#6d28d9] text-white shadow-lg shadow-[#7C3AED]/20'
+                        }`}
+                      >
+                        {generating3D ? (
+                          <>
+                            <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Generating 3D model from document…
+                          </>
+                        ) : (
+                          <>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                              <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                              <path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" />
+                            </svg>
+                            Generate 3D from this document
+                          </>
+                        )}
+                      </button>
+                      {gen3DError && (
+                        <p className="mt-2 text-xs text-red-400">{gen3DError}</p>
+                      )}
+                    </div>
                   )}
                 </div>
 

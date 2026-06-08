@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { GeneratedModel } from '../types';
 import { TextExtractor } from './TextExtractor';
 import { ExtractionHistoryModal } from './ExtractionHistoryModal';
 
@@ -11,9 +12,10 @@ interface TextExtractionResult {
 
 interface FilesTreatmentProps {
   onTextExtracted?: (text: string) => void;
+  onModelGenerated?: (model: GeneratedModel) => void;
 }
 
-export const FilesTreatment: React.FC<FilesTreatmentProps> = ({ onTextExtracted }) => {
+export const FilesTreatment: React.FC<FilesTreatmentProps> = ({ onTextExtracted, onModelGenerated }) => {
   const [extractedResults, setExtractedResults] = useState<TextExtractionResult[]>([]);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   
@@ -72,7 +74,10 @@ export const FilesTreatment: React.FC<FilesTreatmentProps> = ({ onTextExtracted 
         
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
-            <TextExtractor onExtractComplete={handleExtractComplete} />
+            <TextExtractor
+              onExtractComplete={handleExtractComplete}
+              onModelGenerated={onModelGenerated}
+            />
           </div>
         </div>
       </div>

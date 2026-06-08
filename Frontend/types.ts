@@ -71,6 +71,8 @@ export interface GeneratedModel {
   fromCache?: boolean;
   attempt?: number;
   generationTime?: number;
+  faceCount?: number;
+  fileSizeMb?: number;
 }
 
 export type AppView = 'agent' | 'files' | 'settings' | 'image-to-3d' | 'text-to-3d' | 'multiview-to-3d' | 'gallery';

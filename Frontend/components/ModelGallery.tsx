@@ -71,6 +71,22 @@ const sourceColors: Record<GeneratedModel['source'], string> = {
   'multiview-to-3d': 'bg-emerald-500/20 text-emerald-400',
 };
 
+function fmtFaces(n?: number): string | null {
+  if (n == null) return null;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k faces`;
+  return `${n} faces`;
+}
+
+function fmtSize(mb?: number): string | null {
+  if (mb == null) return null;
+  return `${mb.toFixed(1)} MB`;
+}
+
+function fmtTime(s?: number): string | null {
+  if (s == null) return null;
+  return `${s}s`;
+}
+
 export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, onSpawn }) => {
   const [selectedModel, setSelectedModel] = useState<GeneratedModel | null>(null);
   const [unityMenuFor, setUnityMenuFor] = useState<string | null>(null);
@@ -224,11 +240,6 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
                         v{model.attempt}
                       </span>
                     )}
-                    {model.generationTime != null && (
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-500/20 text-blue-400">
-                        {model.generationTime}s
-                      </span>
-                    )}
                   </div>
                   <span className="text-xs text-theme-muted uppercase">{model.format}</span>
                 </div>
@@ -237,10 +248,30 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
                   <p className="text-xs text-theme-secondary truncate">{model.prompt}</p>
                 )}
 
+                {/* Stats row */}
+                {(model.faceCount != null || model.fileSizeMb != null || model.generationTime != null) && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {fmtFaces(model.faceCount) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-input)] text-theme-muted font-mono">
+                        {fmtFaces(model.faceCount)}
+                      </span>
+                    )}
+                    {fmtSize(model.fileSizeMb) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-input)] text-theme-muted font-mono">
+                        {fmtSize(model.fileSizeMb)}
+                      </span>
+                    )}
+                    {fmtTime(model.generationTime) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 font-mono">
+                        {fmtTime(model.generationTime)}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-theme-muted">
                     {new Date(model.createdAt).toLocaleTimeString()}
-                    {model.generationTime != null && ` · ${model.generationTime}s`}
                   </span>
                   <div className="flex gap-1 items-center">
                     {status?.supported !== false && (
@@ -331,6 +362,20 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
             <div className="p-4">
               <ModelViewer3D src={selectedModel.previewUrl} className="!aspect-[4/3]" />
             </div>
+            {/* Stats in modal */}
+            {(selectedModel.faceCount != null || selectedModel.fileSizeMb != null || selectedModel.generationTime != null) && (
+              <div className="flex gap-3 px-4 pb-2">
+                {fmtFaces(selectedModel.faceCount) && (
+                  <span className="text-xs px-2 py-1 rounded bg-[var(--bg-tertiary)] text-theme-muted font-mono">{fmtFaces(selectedModel.faceCount)}</span>
+                )}
+                {fmtSize(selectedModel.fileSizeMb) && (
+                  <span className="text-xs px-2 py-1 rounded bg-[var(--bg-tertiary)] text-theme-muted font-mono">{fmtSize(selectedModel.fileSizeMb)}</span>
+                )}
+                {fmtTime(selectedModel.generationTime) && (
+                  <span className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-400 font-mono">{fmtTime(selectedModel.generationTime)}</span>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-3 p-4 border-t border-theme">
               <a
                 href={selectedModel.downloadUrl}

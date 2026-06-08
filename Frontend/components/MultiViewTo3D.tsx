@@ -39,9 +39,11 @@ const VIEW_HINTS: Record<ViewName, { tips: string[] }> = {
   },
 };
 
-
-
-
+const PRESETS = {
+  fast:     { steps: 5,  octreeResolution: 64,  faceCount: 10000 },
+  balanced: { steps: 10, octreeResolution: 128, faceCount: 20000 },
+  quality:  { steps: 20, octreeResolution: 192, faceCount: 40000 },
+} as const;
 
 const ViewHint: React.FC<{ view: ViewName }> = ({ view }) => {
   const [open, setOpen]   = useState(false);
@@ -119,7 +121,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
   const [error, setError] = useState<string | null>(null);
   // Basic params
   const [texture, setTexture] = useState(false);
-  const [steps, setSteps] = useState(30);
+  const [steps, setSteps] = useState(10);
   const [outputType, setOutputType] = useState('glb');
   // Advanced params
   const [seed, setSeed] = useState(1234);
@@ -128,6 +130,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
   const [numChunks, setNumChunks] = useState(50000);
   const [faceCount, setFaceCount] = useState(20000);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [activePreset, setActivePreset] = useState<'fast' | 'balanced' | 'quality' | null>('balanced');
   // UI
   const [elapsed, setElapsed] = useState(0);
   const [generationTime, setGenerationTime] = useState<number | null>(null);
@@ -152,11 +155,18 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
     setElapsed(0);
     const tick = () => setElapsed(Math.round((Date.now() - t0) / 1000));
     const id = setInterval(tick, 1000);
-    // Immediately correct the counter when the user returns to this browser tab
     const onVisible = () => { if (!document.hidden) tick(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
   }, [loading]);
+
+  const applyPreset = (preset: 'fast' | 'balanced' | 'quality') => {
+    const p = PRESETS[preset];
+    setSteps(p.steps);
+    setOctreeResolution(p.octreeResolution);
+    setFaceCount(p.faceCount);
+    setActivePreset(preset);
+  };
 
   const cancel = async () => {
     cancelledRef.current = true;
@@ -211,18 +221,37 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
       }
       const { uid } = await submitRes.json();
       currentUidRef.current = uid;
+
+      // WebSocket with polling fallback
       let data: any = null;
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000));
-        if (cancelledRef.current) return;
-        const pollRes = await fetch(`${API_BASE}/api/v1/generation-status/${uid}`);
-        if (!pollRes.ok) throw new Error(`Poll failed: HTTP ${pollRes.status}`);
-        const poll = await pollRes.json();
-        if (poll.status === 'completed') { data = poll; break; }
-        if (poll.status === 'failed') throw new Error(poll.error || 'Generation failed');
-        if (poll.status === 'cancelled') return;
+      const wsBase = API_BASE.replace(/^http/, 'ws');
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const ws = new WebSocket(`${wsBase}/api/v1/ws/generation/${uid}`);
+          ws.onmessage = (ev) => {
+            const prog = JSON.parse(ev.data);
+            if (prog.stage === 'completed') { data = { status: 'completed', ...prog }; ws.close(); resolve(); }
+            else if (prog.stage === 'failed') { ws.close(); reject(new Error(prog.error || 'Generation failed')); }
+            else if (prog.stage === 'cancelled') { ws.close(); resolve(); }
+          };
+          ws.onerror = () => reject(new Error('ws error'));
+        });
+      } catch {
+        // fallback: polling
+        while (true) {
+          await new Promise(r => setTimeout(r, 2000));
+          if (cancelledRef.current) return;
+          const pollRes = await fetch(`${API_BASE}/api/v1/generation-status/${uid}`);
+          if (!pollRes.ok) throw new Error(`Poll failed: HTTP ${pollRes.status}`);
+          const poll = await pollRes.json();
+          if (poll.status === 'completed') { data = poll; break; }
+          if (poll.status === 'failed') throw new Error(poll.error || 'Generation failed');
+          if (poll.status === 'cancelled') return;
+        }
       }
+
       if (cancelledRef.current) return;
+      if (!data) return;
       setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
       setGenerationTime(data.generation_time ?? null);
       onModelGenerated?.({
@@ -234,6 +263,8 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
         createdAt: new Date().toISOString(),
         fromCache: data.from_cache ?? false,
         generationTime: data.generation_time,
+        faceCount: data.face_count,
+        fileSizeMb: data.file_size_mb,
       });
     } catch (e: any) {
       if (!cancelledRef.current) setError(e.message);
@@ -286,6 +317,25 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
               ))}
             </div>
 
+            {/* Presets */}
+            <div className="flex gap-2">
+              {(['fast', 'balanced', 'quality'] as const).map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  disabled={loading}
+                  className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                    activePreset === p
+                      ? 'bg-[#FF8C66] border-[#FF8C66] text-black'
+                      : 'bg-transparent border-theme text-theme-secondary hover:border-[#FF8C66] hover:text-[#FF8C66]'
+                  }`}
+                >
+                  {p === 'fast' ? '⚡ Fast' : p === 'balanced' ? '⚖ Balanced' : '✦ Quality'}
+                </button>
+              ))}
+            </div>
+
             {/* Basic options */}
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-2 text-sm text-theme-secondary">
@@ -301,7 +351,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
               </label>
               <label className="flex items-center gap-2 text-sm text-theme-secondary">
                 Steps:
-                <input type="number" value={steps} onChange={(e) => setSteps(Number(e.target.value))} min={1} max={100}
+                <input type="number" value={steps} onChange={(e) => { setSteps(Number(e.target.value)); setActivePreset(null); }} min={1} max={100}
                   className="w-16 bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary" />
               </label>
             </div>
@@ -330,7 +380,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-theme-secondary">
                   Mesh Resolution
-                  <select value={octreeResolution} onChange={(e) => setOctreeResolution(Number(e.target.value))}
+                  <select value={octreeResolution} onChange={(e) => { setOctreeResolution(Number(e.target.value)); setActivePreset(null); }}
                     className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
                     <option value={64}>64 — fastest</option>
                     <option value={128}>128 — default</option>
@@ -353,7 +403,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
                 {texture && (
                   <label className="flex flex-col gap-1 text-xs text-theme-secondary col-span-2">
                     Max Face Count
-                    <input type="number" value={faceCount} onChange={(e) => setFaceCount(Number(e.target.value))}
+                    <input type="number" value={faceCount} onChange={(e) => { setFaceCount(Number(e.target.value)); setActivePreset(null); }}
                       min={1000} step={1000}
                       className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary" />
                   </label>
@@ -364,7 +414,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setShowAdvanced(true); }}
+                onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setShowAdvanced(true); setActivePreset(null); }}
                 className="px-3 py-1.5 border border-[#FF8C66]/50 hover:border-[#FF8C66] text-[#FF8C66] text-xs font-bold rounded-xl transition-all"
                 disabled={loading}
               >
@@ -372,7 +422,7 @@ export const MultiViewTo3D: React.FC<MultiViewTo3DProps> = ({ onModelGenerated }
               </button>
               <button
                 type="button"
-                onClick={() => { setSteps(50); setOctreeResolution(192); setGuidanceScale(5.0); setNumChunks(50000); setShowAdvanced(true); }}
+                onClick={() => { setSteps(50); setOctreeResolution(192); setGuidanceScale(5.0); setNumChunks(50000); setShowAdvanced(true); setActivePreset(null); }}
                 className="px-3 py-1.5 border border-[#7C3AED]/50 hover:border-[#7C3AED] text-[#a78bfa] text-xs font-bold rounded-xl transition-all"
                 disabled={loading}
               >

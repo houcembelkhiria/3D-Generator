@@ -123,8 +123,6 @@ export default function App() {
       if (diskRes.ok) {
         const diskData = await diskRes.json();
         diskModels = (diskData.models ?? []).map((m: any) => ({
-          // Disk endpoint returns { uid, filename, preview_url, download_url, size, created }.
-          // The `created` field is a Unix epoch float — convert to ISO for the UI.
           id: m.uid ?? m.filename ?? crypto.randomUUID(),
           previewUrl: m.preview_url?.startsWith('http')
             ? m.preview_url
@@ -133,10 +131,14 @@ export default function App() {
             ? m.download_url
             : `${API_BASE}${m.download_url ?? ''}`,
           format: m.format || (m.filename?.split('.').pop() ?? 'glb'),
-          source: 'image-to-3d',
-          createdAt: typeof m.created === 'number'
+          source: (m.source as GeneratedModel['source']) ?? 'image-to-3d',
+          prompt: m.prompt || undefined,
+          createdAt: m.created_at ?? (typeof m.created === 'number'
             ? new Date(m.created * 1000).toISOString()
-            : (m.created_at ?? new Date().toISOString()),
+            : new Date().toISOString()),
+          generationTime: m.generation_time ?? undefined,
+          faceCount: m.face_count ?? undefined,
+          fileSizeMb: m.file_size_mb ?? undefined,
         }));
       }
     } catch { /* backend unreachable; treat disk as empty */ }
@@ -520,7 +522,7 @@ export default function App() {
 
           {/* VIEW: FILES TREATMENT */}
           {activeView === 'files' && (
-            <FilesTreatment onTextExtracted={handleTextExtracted} />
+            <FilesTreatment onTextExtracted={handleTextExtracted} onModelGenerated={handleModelGenerated} />
           )}
 
           {/* VIEW: SETTINGS */}

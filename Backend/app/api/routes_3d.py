@@ -2,15 +2,17 @@
 3D generation API routes — image-to-3d, text-to-3d, multiview-to-3d.
 Powered by Hunyuan3D (hy3dgen).
 """
+import asyncio
 import json
 import logging
 import os
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, WebSocket
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -24,6 +26,23 @@ logger = logging.getLogger(__name__)
 _vector_store: Optional[VectorStore] = None
 
 router = APIRouter(prefix="/api/v1", tags=["3D Generation"])
+
+# Gallery persistence
+_GALLERY_FILE = Path("generated/gallery.json")
+
+
+def _load_gallery() -> list:
+    if _GALLERY_FILE.exists():
+        try:
+            return json.loads(_GALLERY_FILE.read_text())
+        except Exception:
+            return []
+    return []
+
+
+def _save_gallery(models: list):
+    _GALLERY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _GALLERY_FILE.write_text(json.dumps(models, indent=2))
 
 
 def get_hunyuan3d():
@@ -182,24 +201,88 @@ async def cancel_generation(uid: str):
     return {"cancelled": True, "status": _pending_results[uid].get("status")}
 
 
+@router.websocket("/ws/generation/{uid}")
+async def ws_generation(websocket: WebSocket, uid: str):
+    await websocket.accept()
+    try:
+        while True:
+            prog = _progress.get(uid)
+            if prog is None:
+                # Check pending results for status
+                pending = _pending_results.get(uid)
+                if pending is None and uid not in _pending_results:
+                    prog = {"stage": "unknown", "pct": 0}
+                elif pending is None:
+                    prog = {"stage": "generating", "pct": 10}
+                elif isinstance(pending, dict) and pending.get("status") == "completed":
+                    prog = {"stage": "completed", "pct": 100, **pending}
+                elif isinstance(pending, dict) and pending.get("status") == "failed":
+                    prog = {"stage": "failed", "pct": 0, "error": pending.get("error", "")}
+                elif isinstance(pending, dict) and pending.get("status") == "cancelled":
+                    prog = {"stage": "cancelled", "pct": 0}
+                else:
+                    prog = {"stage": "generating", "pct": 10}
+            await websocket.send_json(prog)
+            if prog.get("stage") in ("completed", "failed", "cancelled"):
+                break
+            await asyncio.sleep(0.5)
+    except Exception:
+        pass
+    finally:
+        await websocket.close()
+
+
 @router.get("/generated-models", summary="List all generated 3D models")
 async def list_generated_models():
     output_dir = Path("generated/3d_outputs")
-    if not output_dir.exists():
-        return {"models": []}
 
-    models = []
-    for f in sorted(output_dir.glob("*.glb"), key=lambda p: p.stat().st_mtime, reverse=True):
-        models.append({
-            "filename": f.name,
-            "uid": f.stem,
-            "preview_url": f"/api/v1/outputs/{f.name}",
-            "download_url": f"/api/v1/outputs/{f.name}",
-            "size": f.stat().st_size,
-            "created": f.stat().st_mtime,
+    # Load gallery JSON entries (have full metadata)
+    gallery = _load_gallery()
+    gallery_ids = {e["uid"] for e in gallery if "uid" in e}
+
+    # Also scan disk for any GLBs not in gallery (backwards compat)
+    disk_only = []
+    if output_dir.exists():
+        for f in sorted(output_dir.glob("*.glb"), key=lambda p: p.stat().st_mtime, reverse=True):
+            uid = f.stem
+            if uid not in gallery_ids:
+                disk_only.append({
+                    "id": uid,
+                    "uid": uid,
+                    "filename": f.name,
+                    "preview_url": f"/api/v1/outputs/{f.name}",
+                    "download_url": f"/api/v1/outputs/{f.name}",
+                    "source": "image-to-3d",
+                    "createdAt": datetime.utcfromtimestamp(f.stat().st_mtime).isoformat(),
+                    "created": f.stat().st_mtime,
+                    "size": f.stat().st_size,
+                })
+
+    # Merge: gallery first (newest first), then disk-only
+    models = gallery + disk_only
+    # Sort by createdAt descending
+    def _sort_key(m):
+        return m.get("createdAt") or m.get("created_at") or ""
+    models.sort(key=_sort_key, reverse=True)
+
+    # Normalize field names for frontend
+    normalized = []
+    for m in models:
+        normalized.append({
+            "uid": m.get("uid") or m.get("id", ""),
+            "filename": m.get("filename", f"{m.get('uid', '')}.glb"),
+            "preview_url": m.get("previewUrl") or m.get("preview_url", ""),
+            "download_url": m.get("downloadUrl") or m.get("download_url", ""),
+            "source": m.get("source", "image-to-3d"),
+            "prompt": m.get("prompt", ""),
+            "created_at": m.get("createdAt") or m.get("created_at", ""),
+            "created": m.get("created"),
+            "generation_time": m.get("generationTime") or m.get("generation_time"),
+            "face_count": m.get("faceCount") or m.get("face_count"),
+            "file_size_mb": m.get("fileSizeMb") or m.get("file_size_mb"),
+            "size": m.get("size"),
         })
-    return {"models": models}
-
+    return {"models": normalized}
 
 
 @router.get("/system-stats", summary="Get real-time RAM and VRAM usage")
@@ -329,18 +412,65 @@ async def find_similar_models(body: ImageTo3DRequest):
 _pending_results: dict = {}
 _PENDING_MAX = 500
 
+# Real-time progress tracking: uid -> {"stage": str, "pct": int, ...}
+_progress: dict = {}
 
-def _run_in_background(fn, uid, **kwargs):
+
+def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
     _pending_results[uid] = None  # marks job as in-progress
+    _progress[uid] = {"stage": "started", "pct": 0}
     try:
+        _progress[uid] = {"stage": "generating", "pct": 10}
         result = fn(**kwargs)
+
+        # Compute file stats (Feature 4)
+        glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
+        if glb_path.exists():
+            result["file_size_mb"] = round(glb_path.stat().st_size / (1024 * 1024), 2)
+            try:
+                import trimesh
+                mesh = trimesh.load(str(glb_path))
+                if hasattr(mesh, "faces"):
+                    result["face_count"] = len(mesh.faces)
+                elif hasattr(mesh, "geometry"):
+                    result["face_count"] = sum(
+                        g.faces.shape[0] for g in mesh.geometry.values() if hasattr(g, "faces")
+                    )
+            except Exception:
+                pass
+
         # Don't overwrite a cancellation that arrived while we were running
         if _pending_results.get(uid) != {"status": "cancelled"}:
             _pending_results[uid] = {"status": "completed", **result}
+            _progress[uid] = {"stage": "completed", "pct": 100, **result}
+
+            # Gallery persistence (Feature 3)
+            try:
+                entry = {
+                    "id": uid,
+                    "uid": uid,
+                    "prompt": prompt,
+                    "source": source,
+                    "previewUrl": result.get("preview_url", ""),
+                    "downloadUrl": result.get("download_url", ""),
+                    "createdAt": datetime.utcnow().isoformat(),
+                    "generationTime": result.get("generation_time"),
+                    "faceCount": result.get("face_count"),
+                    "fileSizeMb": result.get("file_size_mb"),
+                }
+                gallery = _load_gallery()
+                # Remove any existing entry with same uid
+                gallery = [e for e in gallery if e.get("uid") != uid]
+                gallery.insert(0, entry)
+                _save_gallery(gallery[:200])
+            except Exception:
+                logger.exception("Failed to save gallery entry for %s", uid)
+
     except Exception as exc:
         logger.exception("Background generation %s failed", uid)
         if _pending_results.get(uid) != {"status": "cancelled"}:
             _pending_results[uid] = {"status": "failed", "error": str(exc)}
+            _progress[uid] = {"stage": "failed", "pct": 0, "error": str(exc)}
     finally:
         # Evict oldest entries when the dict grows too large
         while len(_pending_results) > _PENDING_MAX:
@@ -358,7 +488,7 @@ async def image_to_3d_async(body: ImageTo3DRequest):
                         num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
                         output_type=body.type)
 
-    threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
+    threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "image-to-3d"}, daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -375,7 +505,7 @@ async def text_to_3d_async(body: TextTo3DRequest):
                        num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
                        output_type=body.type, t2i_model=body.t2i_model)
 
-    threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
+    threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "text-to-3d", "prompt": body.text}, daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -396,7 +526,7 @@ async def multiview_to_3d_async(body: MultiViewTo3DRequest):
                             num_chunks=body.num_chunks, texture=body.texture, face_count=body.face_count,
                             output_type=body.type)
 
-    threading.Thread(target=_run_in_background, args=(run, uid), daemon=True).start()
+    threading.Thread(target=_run_in_background, args=(run, uid), kwargs={"source": "multiview-to-3d"}, daemon=True).start()
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -410,6 +540,13 @@ async def delete_model(uid: str):
     if not glb_path.exists():
         raise HTTPException(status_code=404, detail="Model not found")
     glb_path.unlink()
+    # Remove from gallery.json
+    try:
+        gallery = _load_gallery()
+        gallery = [e for e in gallery if e.get("uid") != uid]
+        _save_gallery(gallery)
+    except Exception:
+        pass
     # Best-effort: also remove from vector cache
     if _vector_store is not None:
         try:
