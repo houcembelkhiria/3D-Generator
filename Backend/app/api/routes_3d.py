@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.services.hunyuan3d_service import get_hunyuan3d as _get_hunyuan3d
 from app.services.vector_store import VectorStore
+from app.services import gallery_db
 
 logger = logging.getLogger(__name__)
 
@@ -26,23 +27,6 @@ logger = logging.getLogger(__name__)
 _vector_store: Optional[VectorStore] = None
 
 router = APIRouter(prefix="/api/v1", tags=["3D Generation"])
-
-# Gallery persistence
-_GALLERY_FILE = Path("generated/gallery.json")
-
-
-def _load_gallery() -> list:
-    if _GALLERY_FILE.exists():
-        try:
-            return json.loads(_GALLERY_FILE.read_text())
-        except Exception:
-            return []
-    return []
-
-
-def _save_gallery(models: list):
-    _GALLERY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _GALLERY_FILE.write_text(json.dumps(models, indent=2))
 
 
 def get_hunyuan3d():
@@ -236,8 +220,8 @@ async def ws_generation(websocket: WebSocket, uid: str):
 async def list_generated_models():
     output_dir = Path("generated/3d_outputs")
 
-    # Load gallery JSON entries (have full metadata)
-    gallery = _load_gallery()
+    # Load gallery DB entries (have full metadata)
+    gallery = gallery_db.list_all()
     gallery_ids = {e["uid"] for e in gallery if "uid" in e}
 
     # Also scan disk for any GLBs not in gallery (backwards compat)
@@ -444,25 +428,18 @@ def _run_in_background(fn, uid, source="image-to-3d", prompt="", **kwargs):
             _pending_results[uid] = {"status": "completed", **result}
             _progress[uid] = {"stage": "completed", "pct": 100, **result}
 
-            # Gallery persistence (Feature 3)
+            # Gallery persistence — SQLite
             try:
-                entry = {
-                    "id": uid,
-                    "uid": uid,
-                    "prompt": prompt,
-                    "source": source,
-                    "previewUrl": result.get("preview_url", ""),
-                    "downloadUrl": result.get("download_url", ""),
-                    "createdAt": datetime.utcnow().isoformat(),
-                    "generationTime": result.get("generation_time"),
-                    "faceCount": result.get("face_count"),
-                    "fileSizeMb": result.get("file_size_mb"),
-                }
-                gallery = _load_gallery()
-                # Remove any existing entry with same uid
-                gallery = [e for e in gallery if e.get("uid") != uid]
-                gallery.insert(0, entry)
-                _save_gallery(gallery[:200])
+                gallery_db.insert(
+                    uid=uid,
+                    prompt=prompt,
+                    source=source,
+                    preview_url=result.get("preview_url", ""),
+                    download_url=result.get("download_url", ""),
+                    generation_time=result.get("generation_time"),
+                    face_count=result.get("face_count"),
+                    file_size_mb=result.get("file_size_mb"),
+                )
             except Exception:
                 logger.exception("Failed to save gallery entry for %s", uid)
 
@@ -540,13 +517,8 @@ async def delete_model(uid: str):
     if not glb_path.exists():
         raise HTTPException(status_code=404, detail="Model not found")
     glb_path.unlink()
-    # Remove from gallery.json
-    try:
-        gallery = _load_gallery()
-        gallery = [e for e in gallery if e.get("uid") != uid]
-        _save_gallery(gallery)
-    except Exception:
-        pass
+    # Remove from gallery DB
+    gallery_db.delete(uid)
     # Best-effort: also remove from vector cache
     if _vector_store is not None:
         try:
