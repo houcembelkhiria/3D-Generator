@@ -1678,17 +1678,14 @@ un chemin protégé. Python gère nativement le décodage URL via
 \section{Pipeline agentique LangGraph}
 \label{sec:langgraph}
 
-La version actuelle du pipeline suit un graphe d'exécution fixe :
-Image → rembg → DiT → VAE → export. Cette linéarité est efficace mais
-ne permet pas au système d'\textit{auto-évaluer} la qualité du résultat
-et de relancer la génération si celle-ci est insuffisante.
-
 \textbf{LangGraph} (LangChain Inc., 2024) est un framework Python
-conçu pour orchestrer des \textbf{agents IA sous forme de graphes orientés}.
-Contrairement à une simple chaîne d'appels séquentielle, LangGraph
-permet de définir des \textbf{nœuds} (étapes de traitement) reliés par
-des \textbf{arêtes conditionnelles} : selon le résultat d'un nœud, le
-graphe peut bifurquer, boucler ou se terminer.
+conçu pour orchestrer des \textbf{workflows à état} sous forme de
+graphes orientés. Contrairement à une simple chaîne d'appels séquentielle,
+LangGraph permet de définir des \textbf{nœuds} (étapes de traitement)
+reliés par des \textbf{arêtes conditionnelles} et organisés en
+sous-graphes réutilisables ; selon l'état partagé après l'exécution
+d'un nœud, le routeur conditionnel peut bifurquer, boucler ou
+quitter le sous-graphe pour rendre la main au graphe parent.
 
 \begin{table}[H]
 \centering
@@ -1696,39 +1693,149 @@ graphe peut bifurquer, boucler ou se terminer.
 \label{tab:langgraph}
 \begin{tabularx}{\linewidth}{@{}lXX@{}}
 \toprule
-\textbf{Aspect} & \textbf{Pipeline actuel (linéaire)} & \textbf{Pipeline LangGraph} \\\midrule
-Flux            & Fixe, séquentiel                   & Graphe conditionnel, avec boucles \\
-Auto-évaluation & Aucune                             & Nœud \og juge \fg\ vérifie la qualité \\
-Régénération    & Manuelle (nouveau POST)             & Automatique si score $<$ seuil \\
-Traçabilité     & Logs texte                         & Graphe d'état sérialisable (JSON) \\
-Complexité      & Faible                             & Modérée (dépendance LangChain) \\
+\textbf{Aspect} & \textbf{Pipeline linéaire classique} & \textbf{Pipeline LangGraph (notre implémentation)} \\\midrule
+Flux              & Fixe, séquentiel                & Graphe conditionnel + sous-graphes \\
+Reprise           & Aucune (relance à zéro)         & Checkpointer SQLite : reprise depuis le dernier nœud terminé \\
+Progrès en direct & Aucun                           & Streaming d'événements (1 callback par nœud) \\
+Reprises automatiques & Manuelles (nouveau POST)    & Retry borné par routeur + fallback hand-crafted \\
+Traçabilité       & Logs texte                      & État dictionnaire typé sérialisable (JSON) \\
+HITL              & Impossible sans refacto         & \texttt{interrupt\_after} natif (revue humaine) \\
+Async             & Bloquant                        & \texttt{ainvoke} / \texttt{astream} disponibles \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 Le module \texttt{Backend/app/pipeline/} implémente ce graphe avec
-sept nœuds connectés par des arêtes conditionnelles (\texttt{graph.py}) :
+cinq nœuds top-level et deux \textbf{sous-graphes} compilés
+encapsulant les boucles de retry (\texttt{graph.py}) :
 
 \begin{enumerate}
   \item \textbf{parse\_document} --- lecture du PDF ou email via \texttt{unstructured}.
-  \item \textbf{extract\_spec\_llm} --- extraction JSON des métadonnées 3D par Llama-3.
-  \item \textbf{validate\_spec} --- validation Pydantic du schéma \texttt{ObjectSpec}.
-    Si invalide : retour vers \texttt{extract\_spec\_llm} (max 3 tentatives).
-  \item \textbf{build\_fallback\_spec} --- spécification de repli si le LLM échoue
-    après 3 tentatives.
-  \item \textbf{generate\_mesh} --- appel à Hunyuan3D-2 \texttt{text\_to\_3d}
-    avec le prompt construit depuis les métadonnées.
-  \item \textbf{validate\_mesh} --- vérification que le fichier GLB existe
-    et est non vide (max 2 tentatives).
-  \item \textbf{store\_result} --- écriture des métadonnées finales et retour
-    de l'URL du modèle.
+  \item \textbf{validate\_parsed\_document} --- vérification que le parsing
+    a produit du contenu utilisable (signale les échecs OCR / documents
+    image-only avant de gaspiller des appels LLM).
+  \item \textbf{spec\_extraction} (sous-graphe) --- contient
+    \texttt{extract\_spec\_llm} → \texttt{validate\_spec} avec retry
+    (max 3 tentatives) ou \texttt{build\_fallback\_spec}.
+  \item \textbf{mesh\_generation} (sous-graphe) --- contient
+    \texttt{generate\_mesh} → \texttt{validate\_mesh} avec retry
+    (max 2 tentatives) avant de poursuivre.
+  \item \textbf{store\_result} --- persistance dans \texttt{gallery\_db}
+    et retour des métadonnées du modèle.
 \end{enumerate}
+
+\paragraph{Fonctionnalités LangGraph mobilisées.} L'implémentation exploite
+l'ensemble des primitives offertes par le framework, et non un sous-ensemble
+minimal :
+
+\begin{itemize}
+  \item \texttt{StateGraph} typé avec \texttt{Pipeline3DState} (TypedDict)
+    et reducer \texttt{Annotated[List[str], operator.add]} sur le champ
+    \texttt{errors} pour accumuler les avertissements entre nœuds.
+  \item \texttt{add\_conditional\_edges} pour les routeurs de retry et
+    de fallback, ramenant en arrière dans le sous-graphe tant que la
+    limite n'est pas atteinte.
+  \item Sous-graphes compilés et insérés comme nœuds dans le graphe parent,
+    isolant les retries internes du flux principal et améliorant la lisibilité.
+  \item \texttt{SqliteSaver} (checkpointer persistant) avec WAL :
+    chaque transition d'état est écrite sur disque, permettant la
+    reprise via \texttt{POST /api/v1/resume-pipeline/\{thread\_id\}}
+    après un crash du worker Celery.
+  \item \texttt{interrupt\_after} optionnel pour le mode
+    \emph{human-in-the-loop} : un opérateur peut inspecter l'état
+    intermédiaire et reprendre l'exécution après validation manuelle.
+  \item Streaming via \texttt{pipeline.stream(subgraphs=True)} : chaque
+    transition de nœud déclenche un callback qui met à jour l'état
+    Celery (\texttt{self.update\_state}) avec \texttt{current\_node} et
+    \texttt{recent\_errors}, exposés au frontend.
+  \item Variantes asynchrones \texttt{ainvoke} et \texttt{astream}
+    disponibles pour migration future vers FastAPI async natif.
+  \item Timeouts par nœud via gestionnaire de contexte \texttt{\_node\_timeout}
+    (\texttt{SIGALRM}) avec budgets configurables par variable
+    d'environnement : \texttt{LG\_TIMEOUT\_LLM=120\,s},
+    \texttt{LG\_TIMEOUT\_MESH=1200\,s}.
+\end{itemize}
 
 Ce pipeline est déclenché via \texttt{POST /api/v1/run-pipeline} et
 exécuté par un worker Celery dans la file \texttt{3d\_generation}.
-L'état du graphe (\texttt{Pipeline3DState}) est un dictionnaire typé
-sérialisable, ce qui permet à Celery de stocker et restituer l'état
-complet en cas de redémarrage du worker.
+L'identifiant de tâche Celery sert directement de \texttt{thread\_id}
+LangGraph, ce qui unifie les deux mécanismes de suivi : un même
+\texttt{task\_id} suffit pour interroger l'état d'avancement
+(\texttt{GET /task/\{id\}}) et pour relancer une exécution
+(\texttt{POST /resume-pipeline/\{id\}}).
+
+\paragraph{Articulation Celery $\leftrightarrow$ LangGraph.} Les deux
+frameworks sont complémentaires et non redondants. LangGraph définit
+\emph{quoi} faire (la structure du workflow, le retry, le fallback,
+la sérialisation d'état). Celery décide \emph{où et quand} l'exécuter
+(file dédiée GPU, isolation par processus, redémarrage propre du
+worker, limites de temps strictes). Le tableau~\ref{tab:celery-langgraph}
+résume la répartition des responsabilités.
+
+{%
+\def\yes{{\color{crispgreen}\checkmark}}%
+\def\no{{\color{red!60}$\times$}}%
+\begin{table}[H]
+\centering
+\caption{Répartition Celery $\leftrightarrow$ LangGraph}
+\label{tab:celery-langgraph}
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Préoccupation} & \textbf{Celery} & \textbf{LangGraph} \\\midrule
+File / queue              & \yes & \no \\
+Isolation processus       & \yes & \no \\
+Retry intra-workflow      & \no  & \yes (routeurs) \\
+Fallback hand-crafted     & \no  & \yes (\texttt{build\_fallback\_spec}) \\
+Reprise post-crash        & \no  & \yes (checkpointer) \\
+Limite de temps globale   & \yes & \no \\
+Limite de temps par nœud  & \no  & \yes (\texttt{\_node\_timeout}) \\
+Progression en direct     & \no  & \yes (\texttt{stream()}) \\
+Stockage du résultat      & \yes (Redis) & \yes (checkpointer) \\
+Annulation propre         & \yes (\texttt{revoke + SIGTERM}) & \no \\
+\bottomrule
+\end{tabularx}
+\end{table}
+}%
+
+\paragraph{Migration des endpoints GPU directs vers Celery.}
+Avant la refactorisation finale, les trois modes de génération directe
+(\texttt{image-to-3d}, \texttt{text-to-3d}, \texttt{multi\-view-to-3d})
+ainsi que \texttt{retexture} s'exécutaient dans le processus FastAPI
+via \texttt{threading.Thread(daemon=True)}, en parallèle des tâches
+Celery réservées au pipeline LangGraph. Cette dualité posait quatre
+problèmes : (i)~un redémarrage de FastAPI tuait tous les jobs en
+cours sans possibilité de reprise ; (ii)~aucune file ne sérialisait
+les requêtes GPU concurrentes, exposant le système à des OOM CUDA ;
+(iii)~les dictionnaires en mémoire \texttt{\_progress} et
+\texttt{\_pending\_results} grossissaient sans persistance et étaient
+plafonnés artificiellement à 500 entrées ; (iv)~les workers Celery
+configurés pour la file \texttt{3d\_generation} étaient inutilisés
+pour ces endpoints.
+
+La refactorisation consolide tous les modes derrière Celery : le module
+\texttt{Backend/app/tasks\_3d.py} expose les quatre tâches GPU
+(\texttt{image\_to\_3d\_task}, \texttt{text\_to\_3d\_task},
+\texttt{multiview\_to\_3d\_task}, \texttt{retexture\_task}) qui
+réalisent les appels au service Hunyuan3D et publient leur état via
+\texttt{self.update\_state(\{stage, pct, \ldots\})}. Le WebSocket
+\texttt{/api/v1/ws/generation/\{uid\}} lit ces états depuis
+\texttt{AsyncResult.info} et transmet la même structure JSON
+\texttt{\{stage, pct, ...\}} attendue par le frontend, garantissant
+l'absence de régression sur le protocole.
+
+\paragraph{Validation par test de fumée.} Un script
+\texttt{Backend/tests/smoke\_test.py} (260 lignes, sans pytest)
+exerce l'ensemble du surface API et la chaîne Celery sans nécessiter
+de Redis ni de GPU. Il utilise le mode \texttt{task\_always\_eager=True}
+de Celery pour exécuter les tâches en ligne et substitue le service
+Hunyuan3D par un objet mock. Les 23 vérifications couvrent les
+quatre endpoints \texttt{/async}, l'enregistrement des tâches
+Celery, la configuration de production, le retrait de
+l'endpoint legacy \texttt{/upload}, le schéma \texttt{Pipeline3DState}
+sans champ obsolète, ainsi que les endpoints
+\texttt{/pipeline-state} et \texttt{/resume-pipeline}. L'exécution
+prend moins de cinq secondes et constitue un filet de sécurité
+pour toute future modification de la chaîne d'exécution.
 
 \section*{Conclusion du chapitre}
 \addcontentsline{toc}{section}{Conclusion du chapitre 3}
@@ -1787,7 +1894,7 @@ IDE         & Visual Studio Code 1.89 \\
 \theadrow
 \textbf{Technologie} & \textbf{Rôle} & \textbf{Justification} \\\midrule
 FastAPI~\cite{fastapi} & API REST & Async natif, doc OpenAPI auto-générée \\
-Celery~\cite{celery} & File de tâches & Pipeline LangGraph (document→3D) ; génération directe via \texttt{threading.Thread} \\
+Celery~\cite{celery} & File de tâches & Tous les modes de génération (4 endpoints directs + pipeline LangGraph) exécutés via workers Celery dédiés, file \texttt{3d\_generation}, \texttt{prefetch\_multiplier=1} pour sérialiser le GPU \\
 Redis~\cite{redis} & Broker/Store & Faible latence, Pub/Sub intégré \\
 Hunyuan3D-2mini & Génération 3D & Variante turbo SOTA 2024, support MPS Apple Silicon \\
 rembg       & Segmentation     & U2-Net léger, sans GPU dédié \\
