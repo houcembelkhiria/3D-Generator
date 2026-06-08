@@ -312,8 +312,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     if args.sse:
+        import uvicorn
         print(f"Starting MCP server (SSE) on http://{args.host}:{args.port}/sse")
-        mcp.run(transport="sse", host=args.host, port=args.port)
+        uvicorn.run(mcp.sse_app(), host=args.host, port=args.port)
     else:
         print("Starting MCP server (stdio) — connect via Claude Code or Claude Desktop")
         mcp.run(transport="stdio")
