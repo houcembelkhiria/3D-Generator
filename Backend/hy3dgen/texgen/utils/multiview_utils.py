@@ -6,6 +6,41 @@ from hy3dgen.device_utils import get_device_manager
 from diffusers import DiffusionPipeline, EulerAncestralDiscreteScheduler
 
 
+def _mv_steps() -> int:
+    """Inference-step count for the multiview UNet.
+
+    Sourced from HY3D_MULTIVIEW_STEPS at call time so the env can be flipped
+    without rebuilding the pipeline. Falls back to the model's original
+    hardcoded default of 25.
+    """
+    raw = os.environ.get("HY3D_MULTIVIEW_STEPS")
+    if not raw:
+        return 25
+    try:
+        n = int(raw)
+        return max(1, n)
+    except ValueError:
+        return 25
+
+
+def _texgen_device_override() -> str | None:
+    """Optional override of where the texgen sub-models run.
+
+    When `HY3D_TEXGEN_DEVICE=mps` (or `cuda`, `cpu`), the historical
+    "force-to-CPU on MPS" fallback is bypassed. Default unset → existing
+    behaviour (CPU on MPS) is preserved.
+
+    The CPU-force was added in commit 4caf310 to dodge MPS bugs (scatter
+    corruption + black/NaN UNet outputs) under torch ~2.4 and an older
+    diffusers. With torch 2.11 those specific ops have been fixed; you
+    can opt back into MPS to test for the larger speedup.
+    """
+    v = os.environ.get("HY3D_TEXGEN_DEVICE", "").strip().lower()
+    if v in ("mps", "cuda", "cpu"):
+        return v
+    return None
+
+
 class Multiview_Diffusion_Net():
     def __init__(self, config) -> None:
         self.view_size = 512
@@ -19,9 +54,16 @@ class Multiview_Diffusion_Net():
         self.device = str(dm.device)
         self.dtype = dm.dtype
 
-        # Force CPU + float32 when device is MPS — avoids MPS OOM/black output
-        if self.device == 'mps':
+        override = _texgen_device_override()
+        if override is not None:
+            print(f"[MV] HY3D_TEXGEN_DEVICE override: {override}")
+            self.device = override
+            # MPS uses fp32 weights; CPU/CUDA stick with their native dm.dtype
+            if override == "mps":
+                self.dtype = torch.float32
+        elif self.device == 'mps':
             print("[MV] Forcing Multiview_Diffusion_Net to CPU/float32 (MPS not supported)")
+            print("[MV] Set HY3D_TEXGEN_DEVICE=mps to try MPS — historical bug from commit 4caf310 may be fixed in torch 2.11.")
             self.device = 'cpu'
             self.dtype = torch.float32
 
@@ -86,11 +128,12 @@ class Multiview_Diffusion_Net():
         kwargs["normal_imgs"] = normal_image
         kwargs["position_imgs"] = position_image
 
+        steps = _mv_steps()
         import sys, time
-        sys.stderr.write(f"\n[MV] CPU inference (25 steps, fp32, {len(control_images)//2} views)...\n")
+        sys.stderr.write(f"\n[MV] {self.device} inference ({steps} steps, {self.dtype}, {len(control_images)//2} views)...\n")
         sys.stderr.flush()
         t0 = time.time()
-        mvd_image = self.pipeline(input_image, num_inference_steps=25, **kwargs).images
+        mvd_image = self.pipeline(input_image, num_inference_steps=steps, **kwargs).images
         for _vi, _vimg in enumerate(mvd_image):
             _varr = np.array(_vimg)
             _mask = _varr[:,:,:3].sum(axis=2) < 700

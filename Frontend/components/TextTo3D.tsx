@@ -15,7 +15,7 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
   const [error, setError] = useState<string | null>(null);
   // Basic params
   const [texture, setTexture] = useState(false);
-  const [steps, setSteps] = useState(20);
+  const [steps, setSteps] = useState(5);
   const [outputType, setOutputType] = useState('glb');
   // Advanced params
   const [seed, setSeed] = useState(1234);
@@ -23,7 +23,9 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
   const [octreeResolution, setOctreeResolution] = useState(192);
   const [numChunks, setNumChunks] = useState(50000);
   const [faceCount, setFaceCount] = useState(20000);
-  const [t2iModel, setT2iModel] = useState('hunyuan');
+  // Hyper-SDXL is the fast path (4-step distilled, ~25-40s on MPS).
+  // HunyuanDiT is the bilingual fallback (~5+ minutes per request on MPS).
+  const [t2iModel, setT2iModel] = useState('hyper_sdxl');
   const [showAdvanced, setShowAdvanced] = useState(false);
   // UI
   const [elapsed, setElapsed] = useState(0);
@@ -178,8 +180,8 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
                   Text-to-Image Model
                   <select value={t2iModel} onChange={(e) => setT2iModel(e.target.value)}
                     className="bg-[var(--bg-input)] border border-theme rounded px-2 py-1 text-sm text-theme-primary">
-                    <option value="hyper_sdxl">Hyper-SDXL 4-step — fast, guidance disabled (CFG=0)</option>
-                    <option value="hunyuan">HunyuanDiT v1.2 — slower, text-guided (CFG=6) ✓ recommended</option>
+                    <option value="hyper_sdxl">Hyper-SDXL 4-step — fast (~30s on MPS), English, no CFG ✓ recommended</option>
+                    <option value="hunyuan">HunyuanDiT v1.2 — slow (~5+ min on MPS), bilingual, CFG=6</option>
                   </select>
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-theme-secondary">
@@ -231,20 +233,20 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
 
             <button
               type="button"
-              onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setShowAdvanced(true); }}
+              onClick={() => { setSteps(1); setOctreeResolution(64); setNumChunks(200000); setT2iModel('hyper_sdxl'); setShowAdvanced(true); }}
               className="w-full px-3 py-1.5 border border-[#FF8C66]/50 hover:border-[#FF8C66] text-[#FF8C66] text-xs font-bold rounded-xl transition-all"
               disabled={loading}
             >
-              ⚡ Draft Mode — fastest (steps=1, res=64, chunks=200k)
+              ⚡ Draft Mode — fastest (steps=1, res=64, chunks=200k, Hyper-SDXL)
             </button>
 
             <button
               type="button"
-              onClick={() => { setSteps(30); setOctreeResolution(192); setNumChunks(100000); setT2iModel('hunyuan'); setShowAdvanced(true); }}
+              onClick={() => { setSteps(8); setOctreeResolution(192); setNumChunks(100000); setT2iModel('hyper_sdxl'); setShowAdvanced(true); }}
               className="w-full px-3 py-1.5 border border-[#7C3AED]/50 hover:border-[#7C3AED] text-[#a78bfa] text-xs font-bold rounded-xl transition-all"
               disabled={loading}
             >
-              ⬆ Quality Mode — best detail (steps=30, res=192, chunks=100k)
+              ⬆ Quality Mode — best detail (steps=8, res=192, chunks=100k, Hyper-SDXL)
             </button>
 
             {loading ? (
@@ -268,7 +270,7 @@ export const TextTo3D: React.FC<TextTo3DProps> = ({ onModelGenerated }) => {
 
             {loading && (
               <div className="text-theme-muted text-xs bg-[var(--bg-tertiary)] p-3 rounded-lg border border-theme">
-                Text-to-3D first generates an image via HunyuanDiT, then converts it to a 3D mesh. This can take 1–3 minutes.
+                Text-to-3D first generates an image via {t2iModel === 'hunyuan' ? 'HunyuanDiT (slow, ~5+ min)' : 'Hyper-SDXL (fast, ~30s)'}, then converts it to a 3D mesh.
               </div>
             )}
           </div>

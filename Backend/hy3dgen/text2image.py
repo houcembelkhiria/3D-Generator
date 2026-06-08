@@ -12,12 +12,16 @@
 # fine-tuning enabling code and other elements of the foregoing made publicly available
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
+import logging
 import os
 import random
+from contextlib import contextmanager
 
 import numpy as np
 import torch
 from diffusers import AutoPipelineForText2Image
+
+logger = logging.getLogger(__name__)
 
 
 def seed_everything(seed):
@@ -25,6 +29,49 @@ def seed_everything(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     os.environ["PL_GLOBAL_SEED"] = str(seed)
+
+
+@contextmanager
+def _temp_default_device(target):
+    """Set torch default device for the duration of pipeline construction.
+
+    `torch.set_default_device('cpu')` was previously called unconditionally
+    at the top of __init__, leaving global state polluted for any subsequent
+    pipeline (and any other code in the process). Wrapping in a context
+    manager scopes the change to the loading window only.
+    """
+    prev = torch.get_default_device()
+    torch.set_default_device(target)
+    try:
+        yield
+    finally:
+        torch.set_default_device(prev)
+
+
+def _force_pipeline_to_device(pipe, device, dtype):
+    """Cascade .to(device, dtype) onto every nn.Module child of a diffusers pipeline.
+
+    Diffusers' built-in `pipe.to(device)` does not always move every
+    sub-module reliably on MPS — most commonly the transformer's
+    PatchEmbed.proj (Conv2d) stays on CPU even after the parent .to() call,
+    which then crashes on first forward with
+        RuntimeError: Input type (MPSFloatType) and weight type (torch.FloatTensor)
+        should be the same.
+    Walking known component names and calling .to() per child fixes this.
+    """
+    for attr in (
+        "transformer", "unet", "vae",
+        "text_encoder", "text_encoder_2",
+        "image_encoder", "controlnet",
+    ):
+        sub = getattr(pipe, attr, None)
+        if sub is None:
+            continue
+        if hasattr(sub, "to"):
+            try:
+                sub.to(device=device, dtype=dtype)
+            except Exception as exc:
+                logger.warning("could not move %s to %s: %s", attr, device, exc)
 
 
 class HunyuanDiTPipeline:
@@ -35,14 +82,18 @@ class HunyuanDiTPipeline:
         device='cpu',
         dtype=torch.float16
     ):
-        torch.set_default_device('cpu')
         self.device = device
-        self.pipe = AutoPipelineForText2Image.from_pretrained(
-            model_path,
-            torch_dtype=dtype,
-            enable_pag=True,
-            pag_applied_layers=["blocks.(16|17|18|19)"]
-        ).to(device)
+        with _temp_default_device('cpu'):
+            self.pipe = AutoPipelineForText2Image.from_pretrained(
+                model_path,
+                torch_dtype=dtype,
+                enable_pag=True,
+                pag_applied_layers=["blocks.(16|17|18|19)"]
+            ).to(device)
+        # Force-cascade .to() onto every component — diffusers' parent .to()
+        # leaves transformer.pos_embed.proj on CPU on this model, which crashes
+        # with "Input MPSFloatType / weight torch.FloatTensor" on first forward.
+        _force_pipeline_to_device(self.pipe, device, dtype)
         # DPM++ 2M SDE Karras: sharper output at the same step count vs default
         try:
             from diffusers import DPMSolverMultistepScheduler
@@ -77,7 +128,7 @@ class HunyuanDiTPipeline:
         # self.pipe.vae.decode = torch.compile(self.pipe.vae.decode, fullgraph=True)
         generator = torch.Generator(device=self.pipe.device)  # infer once for hot-start
         out_img = self.pipe(
-            prompt='美少女战士',
+            prompt='美少女战士',#to do replace with english and test
             negative_prompt='模糊',
             num_inference_steps=15,
             pag_scale=1.3,
@@ -117,9 +168,9 @@ class SDXLHyperPipeline:
     Drop-in replacement for HunyuanDiTPipeline with the same call signature.
     Uses SDXL-base + Hyper-SD 4-step LoRA + TCDScheduler.
 
-    Benchmarks (community, 2024-2026): Hyper-SD >= SDXL-Lightning in quality at
-    equal step count. Strong English subject knowledge (LAION-5B training).
-    Fits in 32 GB MPS with shape-gen loaded.
+    LoRA is fused into base UNet weights at first load and the fused pipeline
+    is cached under generated/fused_models/hyper-sdxl-<dtype>/. Subsequent
+    starts reload from cache and skip the fuse step entirely.
     """
 
     POS_TEMPLATE = (
@@ -144,31 +195,81 @@ class SDXLHyperPipeline:
         from diffusers import StableDiffusionXLPipeline, TCDScheduler, AutoencoderKL
         from huggingface_hub import hf_hub_download
 
-        torch.set_default_device('cpu')
-        self.device = device
-
-        # SDXL base with fp16-fixed VAE (stock SDXL VAE produces NaN in fp16 on MPS)
-        vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=dtype)
-        self.pipe = StableDiffusionXLPipeline.from_pretrained(
-            model_path,
-            torch_dtype=dtype,
-            variant="fp16" if dtype == torch.float16 else None,
-            use_safetensors=True,
-            vae=vae,
+        from app.services.weight_optim import (
+            fuse_lora_safe,
+            fused_cache_path,
+            has_fused_cache,
         )
 
-        # Load Hyper-SD 4-step LoRA as an active adapter (DO NOT fuse — fuse_lora()
-        # leaves some submodule tensors at fp32 which breaks MPS matmul dtype check)
-        lora_path = hf_hub_download(repo_id=lora_repo, filename=lora_weight)
-        self.pipe.load_lora_weights(lora_path)
+        self.device = device
 
-        # Force the entire pipeline (including freshly-loaded LoRA layers) to the
-        # target dtype and device together — avoids MPS "Destination NDArray and
-        # Accumulator NDArray cannot have different datatype" in matmul
-        self.pipe.to(device=device, dtype=dtype)
+        # Cache key is dtype-specific: an fp32 fused cache is not interchangeable
+        # with an fp16 one (diffusers stores weights in whatever dtype was used
+        # at save time).
+        dtype_tag = str(dtype).split(".")[-1]  # float32 / float16 / bfloat16
+        cache_name = f"hyper-sdxl-{dtype_tag}"
+        cache_path = fused_cache_path(cache_name)
 
-        # TCDScheduler — ByteDance-recommended for Hyper-SD few-step sampling
-        self.pipe.scheduler = TCDScheduler.from_config(self.pipe.scheduler.config)
+        with _temp_default_device('cpu'):
+            if has_fused_cache(cache_name):
+                logger.info("[fused-lora] loading from cache → %s", cache_path)
+                # Cached pipeline already has LoRA fused and TCDScheduler in its config.
+                self.pipe = StableDiffusionXLPipeline.from_pretrained(
+                    str(cache_path),
+                    torch_dtype=dtype,
+                    use_safetensors=True,
+                )
+                self.pipe.to(device=device, dtype=dtype)
+            else:
+                logger.info(
+                    "[fused-lora] no cache — fusing Hyper-SD into SDXL UNet "
+                    "(one-time, ~5s). Cache target: %s",
+                    cache_path,
+                )
+                # fp16-fixed VAE. Stock SDXL VAE produces NaN in fp16 on MPS.
+                vae = AutoencoderKL.from_pretrained(vae_path, torch_dtype=dtype)
+                self.pipe = StableDiffusionXLPipeline.from_pretrained(
+                    model_path,
+                    torch_dtype=dtype,
+                    variant="fp16" if dtype == torch.float16 else None,
+                    use_safetensors=True,
+                    vae=vae,
+                )
+
+                lora_path = hf_hub_download(repo_id=lora_repo, filename=lora_weight)
+                self.pipe.load_lora_weights(lora_path)
+
+                # Pre-set the inference scheduler so it gets written into the
+                # saved pipeline's config.
+                self.pipe.scheduler = TCDScheduler.from_config(self.pipe.scheduler.config)
+
+                # Fuse LoRA deltas into base weights on CPU, then normalise dtype
+                # across the pipeline. Normalisation is the step that was missing
+                # in the previous "DO NOT fuse" path — without it, a handful of
+                # submodule tensors end up at fp32 after fuse_lora() even when the
+                # pipe was loaded at fp16, which triggers MPS matmul dtype errors.
+                fused, touched = fuse_lora_safe(
+                    self.pipe, target_device="cpu", target_dtype=dtype,
+                )
+                logger.info(
+                    "[fused-lora] fused Hyper-SD LoRA; dtype-normalised %d tensors",
+                    touched,
+                )
+
+                # Persist so subsequent boots skip all of the above.
+                try:
+                    self.pipe.save_pretrained(str(cache_path), safe_serialization=True)
+                    logger.info("[fused-lora] cached fused pipeline → %s", cache_path)
+                except Exception as exc:
+                    logger.warning("[fused-lora] could not write cache: %s", exc)
+
+                # Move the live pipeline to its runtime device.
+                self.pipe.to(device=device, dtype=dtype)
+
+        # Same MPS placement guard as HunyuanDiT — force-cascade onto every
+        # nn.Module child to avoid stranded fp32-on-CPU sub-tensors.
+        _force_pipeline_to_device(self.pipe, device, dtype)
+
         self.pipe.set_progress_bar_config(disable=True)
 
         # Disable safety checker if present (it isn't on SDXL-base, but defensive)
@@ -193,4 +294,3 @@ class SDXLHyperPipeline:
             generator=generator,
         ).images[0]
         return out_img
-

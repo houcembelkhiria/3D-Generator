@@ -10,6 +10,7 @@ import base64
 import os
 import gc
 import logging
+import threading
 import time
 import uuid
 from io import BytesIO
@@ -34,7 +35,7 @@ from hy3dgen.shapegen import (
 from hy3dgen.shapegen.pipelines import export_to_trimesh
 from hy3dgen.system_utils import empty_cache
 
-from app.core.hunyuan3d_config import Hunyuan3DSettings
+from app.core.hunyuan3d_config import Hunyuan3DSettings, T2I_STEPS_DEFAULT
 from hy3dgen.device_utils import get_device_manager, DeviceManager
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ class Hunyuan3DService:
         # --- Multi-view pipeline (deferred — loaded on first use) ---
         self.mv_pipeline: Optional[Any] = None
         self._mv_loaded = False
+        self._mv_lock = threading.Lock()
 
         # --- Post-processors ---
         self.floater_remover = FloaterRemover()
@@ -248,6 +250,30 @@ class Hunyuan3DService:
                 pass
             # Texgen models (multiview UNet, delight UNet) must NOT be int8 quantized —
             # diffusion models require full precision for correct color output
+
+            # Opt-in bfloat16 cast — currently DISABLED.
+            #
+            # The naive cast (unet → bf16, vae stays fp32) crashes on first
+            # forward: the VAE-encoded latent enters the UNet as fp32 but
+            # encounters bf16 weights at the first matmul (mat1=Float vs
+            # mat2=BFloat16). Fixing it cleanly requires casting the entire
+            # sub-pipeline including the VAE, which then risks the texture-
+            # colour regression that commit 4caf310 already had to fix.
+            #
+            # Until we have a safer path (e.g. runtime input up-cast at the
+            # UNet boundary, or a verified all-bf16 mode that preserves
+            # colour), this flag is acknowledged but no cast is performed.
+            # Wall-clock improvement targets the step-count flags instead:
+            # HY3D_MULTIVIEW_STEPS / HY3D_DELIGHT_STEPS.
+            if self.settings.bf16_texgen:
+                logger.info(
+                    "[bf16-texgen] flag set but cast is currently disabled "
+                    "(pipeline dtype-mismatch crash on partial cast, colour "
+                    "regression risk on full cast). Set "
+                    "HY3D_MULTIVIEW_STEPS / HY3D_DELIGHT_STEPS for the main "
+                    "speedup lever."
+                )
+
             self._texgen_loaded = True
             logger.info("Texture pipeline ready")
         except Exception as exc:
@@ -332,6 +358,19 @@ class Hunyuan3DService:
             logger.info("Text-to-image pipeline ready (model=%s)", target_model)
         except Exception as exc:
             logger.warning("Failed to load text-to-image pipeline: %s", exc)
+
+    def _resolve_t2i_steps(self) -> int:
+        """Pick the step count for the currently-loaded t2i model.
+
+        Order of precedence:
+          1. HY3D_T2I_STEPS env var (if set), via settings.t2i_steps
+          2. Per-model default from T2I_STEPS_DEFAULT
+          3. Hard fallback of 4 (the SDXL value)
+        """
+        if self.settings.t2i_steps is not None:
+            return max(1, int(self.settings.t2i_steps))
+        model_name = getattr(self, "_t2i_current_model", None) or self.settings.t2i_model
+        return T2I_STEPS_DEFAULT.get(model_name, 4)
 
     def _unload_pipeline(self, name: str):
         """Unload a pipeline to free RAM."""
@@ -512,7 +551,7 @@ class Hunyuan3DService:
             )
         save_dir = self._get_save_dir()
         preview_path = save_dir / f"{uid}.glb"
-        
+
         # Export in background thread for faster response
         import threading
         def _do_export():
@@ -520,7 +559,7 @@ class Hunyuan3DService:
             if out_type != "glb":
                 download_path = save_dir / f"{uid}.{out_type}"
                 mesh.export(str(download_path), include_normals=include_normals)
-        
+
         t = threading.Thread(target=_do_export, daemon=True)
         t.start()
         t.join(timeout=30)  # Wait max 10s, usually done in <2s
@@ -657,13 +696,17 @@ class Hunyuan3DService:
         if not self.has_t2i or self.t2i_pipeline is None:
             raise RuntimeError("Text-to-3D is disabled. Enable with HY3D_ENABLE_T23D=true.")
 
-        # FIRST ATTEMPT        # FIRST ATTEMPT — full t2i + shape gen
+        # FIRST ATTEMPT — full t2i + shape gen
         _t_start = time.time()
         # Move t2i back to device (may have been offloaded to CPU after previous run)
         self._move_to_device("t2i_pipeline")
         t0 = time.time()
-        image = self.t2i_pipeline(text, seed=seed, num_inference_steps=20)
-        logger.info("Text-to-image took %.1f s (attempt #1)", time.time() - t0)
+        # Step count is model-aware: SDXL=4 (distilled), HunyuanDiT=10 (native).
+        # Override globally with HY3D_T2I_STEPS.
+        t2i_steps = self._resolve_t2i_steps()
+        image = self.t2i_pipeline(text, seed=seed, num_inference_steps=t2i_steps)
+        logger.info("Text-to-image took %.1f s (%s, %d steps, attempt #1)",
+                    time.time() - t0, self._t2i_current_model, t2i_steps)
         # DEBUG: save t2i output so we can inspect if mesh gen fails
         try:
             import os as _os
@@ -675,12 +718,12 @@ class Hunyuan3DService:
             logger.warning("Could not save t2i debug image: %s", _e)
         # Free t2i memory before shape gen
         self._offload_to_cpu("t2i_pipeline")
-        
+
         buf = BytesIO()
         image.save(buf, format="PNG")
         image_b64 = base64.b64encode(buf.getvalue()).decode()
         buf.close()
-        
+
         # Shape gen may fail on ambiguous t2i images — retry with different seeds
         max_retries = 3
         last_error = None
@@ -752,52 +795,53 @@ class Hunyuan3DService:
         _attempt = 1
 
         # Offload other pipelines for MV
-        self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")
-        self._move_to_device("mv_pipeline")
-
-        generator = torch.Generator(self.device).manual_seed(seed)
-        t0 = time.time()
-        with torch.inference_mode():
-            outputs = self.mv_pipeline(
-                image=image_dict,
-                num_inference_steps=steps,
-                guidance_scale=guidance_scale,
-                generator=generator,
-                octree_resolution=octree_resolution,
-                num_chunks=num_chunks,
-                output_type="mesh",
-                enable_pbar=False,
-            )
-        mesh = export_to_trimesh(outputs)[0]
-        logger.info("MV shape gen took %.1f s", time.time() - t0)
-
-        # Clean mesh: remove floaters + degenerate faces + keep largest component
-        try:
-            _pp_t0 = time.time()
-            mesh = self.floater_remover(mesh)
-            mesh = self.degenerate_face_remover(mesh)
-            mesh = self._keep_largest_component(mesh)
-            logger.info("MV mesh cleanup took %.2f s", time.time() - _pp_t0)
-        except Exception as _e:
-            logger.warning("MV mesh cleanup failed (non-fatal): %s", _e)
-
-        include_normals = False
-        front_image = image_dict.get("front")
-        if texture and self.has_texgen and front_image:
-            self._ensure_texgen_loaded()
-            mesh = self.face_reducer(mesh, max_facenum=face_count)
-            self._offload_to_cpu("mv_pipeline")
+        with self._mv_lock:
+            self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")
+            self._move_to_device("mv_pipeline")
+    
+            generator = torch.Generator(self.device).manual_seed(seed)
             t0 = time.time()
-            # Pass all user-provided views so texgen can substitute real back/left/right
-            # images instead of hallucinating them from the front image alone.
-            mesh = self.texgen_pipeline(mesh, front_image, user_views=image_dict)
-            logger.info("Texture gen took %.1f s", time.time() - t0)
-            include_normals = True
-
-        # Restore primary pipeline
-        self._offload_to_cpu("mv_pipeline")
-        self._move_to_device("i23d_pipeline")
-
+            with torch.inference_mode():
+                outputs = self.mv_pipeline(
+                    image=image_dict,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    octree_resolution=octree_resolution,
+                    num_chunks=num_chunks,
+                    output_type="mesh",
+                    enable_pbar=False,
+                )
+            mesh = export_to_trimesh(outputs)[0]
+            logger.info("MV shape gen took %.1f s", time.time() - t0)
+    
+            # Clean mesh: remove floaters + degenerate faces + keep largest component
+            try:
+                _pp_t0 = time.time()
+                mesh = self.floater_remover(mesh)
+                mesh = self.degenerate_face_remover(mesh)
+                mesh = self._keep_largest_component(mesh)
+                logger.info("MV mesh cleanup took %.2f s", time.time() - _pp_t0)
+            except Exception as _e:
+                logger.warning("MV mesh cleanup failed (non-fatal): %s", _e)
+    
+            include_normals = False
+            front_image = image_dict.get("front")
+            if texture and self.has_texgen and front_image:
+                self._ensure_texgen_loaded()
+                mesh = self.face_reducer(mesh, max_facenum=face_count)
+                self._offload_to_cpu("mv_pipeline")
+                t0 = time.time()
+                # Pass all user-provided views so texgen can substitute real back/left/right
+                # images instead of hallucinating them from the front image alone.
+                mesh = self.texgen_pipeline(mesh, front_image, user_views=image_dict)
+                logger.info("Texture gen took %.1f s", time.time() - t0)
+                include_normals = True
+    
+            # Restore primary pipeline
+            self._offload_to_cpu("mv_pipeline")
+            self._move_to_device("i23d_pipeline")
+    
         result = self._export_mesh(mesh, uid, out_type, include_normals)
 
         # --- Vector cache store (with attempt tracking) ---

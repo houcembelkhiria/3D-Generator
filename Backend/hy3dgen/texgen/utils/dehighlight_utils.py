@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import torch
@@ -6,14 +7,46 @@ from diffusers import StableDiffusionInstructPix2PixPipeline, EulerAncestralDisc
 from hy3dgen.device_utils import get_device_manager
 
 
+def _delight_steps_env_default() -> int:
+    """Default for the InstructPix2Pix delight pipeline.
+
+    HY3D_DELIGHT_STEPS overrides; falls back to 20 (the prior hardcoded
+    default of this util's __call__).
+    """
+    raw = os.environ.get("HY3D_DELIGHT_STEPS")
+    if not raw:
+        return 20
+    try:
+        n = int(raw)
+        return max(1, n)
+    except ValueError:
+        return 20
+
+
+def _texgen_device_override() -> str | None:
+    """Same override mechanism as multiview_utils — see that file's docstring."""
+    v = os.environ.get("HY3D_TEXGEN_DEVICE", "").strip().lower()
+    if v in ("mps", "cuda", "cpu"):
+        return v
+    return None
+
+
 class Light_Shadow_Remover:
     def __init__(self, config):
         delight_ckpt_path = config.light_remover_ckpt_path
         dm = get_device_manager()
         device_str = str(dm.device)
 
-        # Force CPU + float32 when device is MPS (matches working fork)
-        if device_str == 'mps':
+        override = _texgen_device_override()
+        if override is not None:
+            self.device = override
+            if override == "mps":
+                torch_dtype = torch.float32
+            else:
+                torch_dtype = dm.dtype if override != "cpu" else torch.float32
+        elif device_str == 'mps':
+            # Force CPU + float32 when device is MPS (matches working fork — see commit 4caf310).
+            # Set HY3D_TEXGEN_DEVICE=mps to bypass and try MPS again.
             self.device = 'cpu'
             torch_dtype = torch.float32
         else:
@@ -54,8 +87,10 @@ class Light_Shadow_Remover:
             corrected_bgr = torch.cat([corrected_bgr, alpha_channel], dim=-1)
         return corrected_bgr
 
-    def __call__(self, image, num_inference_steps=20):
-        # Working fork: 50 steps hardcoded
+    def __call__(self, image, num_inference_steps: int | None = None):
+        # If caller passes None, defer to env var (HY3D_DELIGHT_STEPS) → fallback 20.
+        if num_inference_steps is None:
+            num_inference_steps = _delight_steps_env_default()
         image = image.resize((512, 512), Image.Resampling.LANCZOS)
 
         if image.mode == 'RGBA':

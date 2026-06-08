@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { PipelineStep, GenerationMethod, AssetMetadata, ProcessLog, SystemStatus, AppView, GeneratedModel } from './types';
 import { PipelineVisualizer } from './components/PipelineVisualizer';
 import { Terminal } from './components/Terminal';
@@ -110,50 +110,100 @@ export default function App() {
     setMountedViews(prev => { prev.add(activeView); return new Set(prev); });
   }, [activeView]);
 
-  // Fetch gallery from vector cache DB on mount
-  useEffect(() => {
-    const fetchGallery = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/cache-stats`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.models && data.models.length > 0) {
-            const cached: GeneratedModel[] = data.models.map((m: any) => ({
-              id: m.id,
-              previewUrl: m.previewUrl.startsWith('http') ? m.previewUrl : `${API_BASE}${m.previewUrl}`,
-              downloadUrl: m.downloadUrl.startsWith('http') ? m.downloadUrl : `${API_BASE}${m.downloadUrl}`,
-              format: m.format || 'glb',
-              source: m.source || 'image-to-3d',
-              prompt: m.prompt,
-              createdAt: m.createdAt,
-              fromCache: true,
-              attempt: m.attempt,
-              generationTime: m.generationTime,
-            }));
-            setGeneratedModels(cached);
-            return;
-          }
+  // Load gallery from disk (the actual source of truth — generated/3d_outputs/*.glb).
+  // We also probe the vector cache for richer metadata (prompt, source) and merge
+  // it on top, but disk is the canonical list. Disk listing is loaded fresh on
+  // every call, so newly-added GLBs (including from this session) are picked up.
+  const fetchGallery = useCallback(async () => {
+    let diskModels: GeneratedModel[] = [];
+    try {
+      const diskRes = await fetch(`${API_BASE}/api/v1/generated-models`);
+      if (diskRes.ok) {
+        const diskData = await diskRes.json();
+        diskModels = (diskData.models ?? []).map((m: any) => ({
+          // Disk endpoint returns { uid, filename, preview_url, download_url, size, created }.
+          // The `created` field is a Unix epoch float — convert to ISO for the UI.
+          id: m.uid ?? m.filename ?? crypto.randomUUID(),
+          previewUrl: m.preview_url?.startsWith('http')
+            ? m.preview_url
+            : `${API_BASE}${m.preview_url ?? ''}`,
+          downloadUrl: m.download_url?.startsWith('http')
+            ? m.download_url
+            : `${API_BASE}${m.download_url ?? ''}`,
+          format: m.format || (m.filename?.split('.').pop() ?? 'glb'),
+          source: 'image-to-3d',
+          createdAt: typeof m.created === 'number'
+            ? new Date(m.created * 1000).toISOString()
+            : (m.created_at ?? new Date().toISOString()),
+        }));
+      }
+    } catch { /* backend unreachable; treat disk as empty */ }
+
+    // Best-effort enrichment from the vector cache (prompt, source, generation_time).
+    // The cache may be empty or stale — that's fine, disk is still the truth.
+    const meta = new Map<string, Partial<GeneratedModel>>();
+    try {
+      const cacheRes = await fetch(`${API_BASE}/api/v1/cache-stats`);
+      if (cacheRes.ok) {
+        const cacheData = await cacheRes.json();
+        for (const m of (cacheData.models ?? [])) {
+          // Cache id is an opaque string; line it up with disk by matching the
+          // GLB filename that's embedded in preview_url (last path segment minus extension).
+          const url: string = m.previewUrl ?? '';
+          const stem = url.split('/').pop()?.replace(/\.glb$/i, '');
+          if (!stem) continue;
+          meta.set(stem, {
+            source: m.source,
+            prompt: m.prompt,
+            attempt: m.attempt,
+            generationTime: m.generationTime,
+            fromCache: true,
+          });
         }
-        // Fallback: load from disk if cache is empty
-        const diskRes = await fetch(`${API_BASE}/api/v1/generated-models`);
-        if (diskRes.ok) {
-          const diskData = await diskRes.json();
-          if (diskData.models && diskData.models.length > 0) {
-            const disk: GeneratedModel[] = diskData.models.map((m: any) => ({
-              id: m.id,
-              previewUrl: m.preview_url.startsWith('http') ? m.preview_url : `${API_BASE}${m.preview_url}`,
-              downloadUrl: m.download_url.startsWith('http') ? m.download_url : `${API_BASE}${m.download_url}`,
-              format: m.format || 'glb',
-              source: 'image-to-3d',
-              createdAt: m.created_at,
-            }));
-            setGeneratedModels(disk);
-          }
-        }
-      } catch { /* Backend not reachable yet */ }
-    };
-    fetchGallery();
+      }
+    } catch { /* enrichment is optional */ }
+
+    if (diskModels.length === 0 && meta.size > 0) {
+      // No disk files but cache has entries — fall back to cache so the user
+      // at least sees something. URLs may be broken, but better than empty.
+      const fromCacheOnly = Array.from(meta.entries()).map(([stem, m]) => ({
+        id: stem,
+        previewUrl: `${API_BASE}/api/v1/outputs/${stem}.glb`,
+        downloadUrl: `${API_BASE}/api/v1/outputs/${stem}.glb`,
+        format: 'glb',
+        source: (m.source as GeneratedModel['source']) ?? 'image-to-3d',
+        createdAt: new Date().toISOString(),
+        ...m,
+      } as GeneratedModel));
+      setGeneratedModels(fromCacheOnly);
+      return;
+    }
+
+    const merged = diskModels.map(d => {
+      const enrich = meta.get(d.id) ?? {};
+      return { ...d, ...enrich };
+    });
+    setGeneratedModels(prev => {
+      // Preserve any in-session items that aren't on disk yet (very fresh generations
+      // where the export thread hasn't flushed). Match by id; disk wins on conflict.
+      const onDisk = new Set(merged.map(m => m.id));
+      const inSessionOnly = prev.filter(m => !onDisk.has(m.id));
+      return [...inSessionOnly, ...merged];
+    });
   }, []);
+
+  // Initial fetch on mount.
+  useEffect(() => { fetchGallery(); }, [fetchGallery]);
+
+  // Refetch when the backend transitions to ready — handles the page-load-before-
+  // backend-ready race that previously left the gallery stuck empty for the session.
+  const wasReadyRef = useRef(false);
+  useEffect(() => {
+    if (systemStatus.hunyuan3dReady && !wasReadyRef.current) {
+      wasReadyRef.current = true;
+      fetchGallery();
+    }
+  }, [systemStatus.hunyuan3dReady, fetchGallery]);
 
   const addMockFile = () => {
     const mockFiles = ["specifications_v1.pdf", "asset_reference.jpg", "mechanics.xml"];

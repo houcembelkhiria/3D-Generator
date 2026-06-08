@@ -6,8 +6,8 @@ from PIL import Image
 from typing import Union, Optional
 
 from .differentiable_renderer.mesh_render import MeshRender
-from .utils.dehighlight_utils import Light_Shadow_Remover
-from .utils.multiview_utils import Multiview_Diffusion_Net
+from .utils.dehighlight_utils import Light_Shadow_Remover, _delight_steps_env_default
+from .utils.multiview_utils import Multiview_Diffusion_Net, _mv_steps
 from hy3dgen.system_utils import empty_cache, get_device
 from .utils.uv_warp_utils import mesh_uv_wrap
 
@@ -154,7 +154,7 @@ class Hunyuan3DPaintPipeline:
         image_prompt = Image.open(image) if isinstance(image, str) else image
         trace("Recentering image...")
         image_prompt = self.recenter_image(image_prompt)
-        trace("Running delight (CPU + 50 steps, working fork config)...")
+        trace(f"Running delight ({_delight_steps_env_default()} steps, override via HY3D_DELIGHT_STEPS)...")
         image_prompt = self.models['delight_model'](image_prompt)
         try:
             _dbg = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'generated', '_debug')
@@ -177,7 +177,7 @@ class Hunyuan3DPaintPipeline:
             normal_maps.append(self.render.render_normal(elev, azim, use_abs_coor=True, return_type='pl'))
             position_maps.append(self.render.render_position(elev, azim, return_type='pl'))
 
-        trace("Running multiview (CPU + float32 + 30 steps, like working fork)...")
+        trace(f"Running multiview ({_mv_steps()} steps, override via HY3D_MULTIVIEW_STEPS)...")
         camera_info = [(((azim // 30) + 9) % 12) // {-20: 1, 0: 1, 20: 1, -90: 3, 90: 3}[
             elev] + {-20: 0, 0: 12, 20: 24, -90: 36, 90: 40}[elev] for azim, elev in
                        zip(selected_camera_azims, selected_camera_elevs)]
