@@ -447,18 +447,21 @@ async def find_similar_models(body: ImageTo3DRequest):
 @router.post("/image-to-3d/async", summary="Submit async image-to-3d job")
 async def image_to_3d_async(body: ImageTo3DRequest):
     uid = str(uuid.uuid4())
-    celery_app.send_task(
-        "app.tasks_3d.image_to_3d_task",
-        kwargs={
-            "image_b64": body.image, "seed": body.seed,
-            "num_inference_steps": body.num_inference_steps,
-            "guidance_scale": body.guidance_scale,
-            "octree_resolution": body.octree_resolution,
-            "num_chunks": body.num_chunks, "texture": body.texture,
-            "face_count": body.face_count, "output_type": body.type,
-        },
-        task_id=uid,
-    )
+    try:
+        celery_app.send_task(
+            "app.tasks_3d.image_to_3d_task",
+            kwargs={
+                "image_b64": body.image, "seed": body.seed,
+                "num_inference_steps": body.num_inference_steps,
+                "guidance_scale": body.guidance_scale,
+                "octree_resolution": body.octree_resolution,
+                "num_chunks": body.num_chunks, "texture": body.texture,
+                "face_count": body.face_count, "output_type": body.type,
+            },
+            task_id=uid,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -468,19 +471,22 @@ async def text_to_3d_async(body: TextTo3DRequest):
     if not svc.has_t2i:
         raise HTTPException(status_code=503, detail="Text-to-3D is disabled.")
     uid = str(uuid.uuid4())
-    celery_app.send_task(
-        "app.tasks_3d.text_to_3d_task",
-        kwargs={
-            "text": body.text, "seed": body.seed,
-            "num_inference_steps": body.num_inference_steps,
-            "guidance_scale": body.guidance_scale,
-            "octree_resolution": body.octree_resolution,
-            "num_chunks": body.num_chunks, "texture": body.texture,
-            "face_count": body.face_count, "output_type": body.type,
-            "t2i_model": body.t2i_model,
-        },
-        task_id=uid,
-    )
+    try:
+        celery_app.send_task(
+            "app.tasks_3d.text_to_3d_task",
+            kwargs={
+                "text": body.text, "seed": body.seed,
+                "num_inference_steps": body.num_inference_steps,
+                "guidance_scale": body.guidance_scale,
+                "octree_resolution": body.octree_resolution,
+                "num_chunks": body.num_chunks, "texture": body.texture,
+                "face_count": body.face_count, "output_type": body.type,
+                "t2i_model": body.t2i_model,
+            },
+            task_id=uid,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -494,18 +500,21 @@ async def multiview_to_3d_async(body: MultiViewTo3DRequest):
     if body.back: views["back"] = body.back
     if body.left: views["left"] = body.left
     if body.right: views["right"] = body.right
-    celery_app.send_task(
-        "app.tasks_3d.multiview_to_3d_task",
-        kwargs={
-            "views": views, "seed": body.seed,
-            "num_inference_steps": body.num_inference_steps,
-            "guidance_scale": body.guidance_scale,
-            "octree_resolution": body.octree_resolution,
-            "num_chunks": body.num_chunks, "texture": body.texture,
-            "face_count": body.face_count, "output_type": body.type,
-        },
-        task_id=uid,
-    )
+    try:
+        celery_app.send_task(
+            "app.tasks_3d.multiview_to_3d_task",
+            kwargs={
+                "views": views, "seed": body.seed,
+                "num_inference_steps": body.num_inference_steps,
+                "guidance_scale": body.guidance_scale,
+                "octree_resolution": body.octree_resolution,
+                "num_chunks": body.num_chunks, "texture": body.texture,
+                "face_count": body.face_count, "output_type": body.type,
+            },
+            task_id=uid,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
     return JSONResponse({"uid": uid, "status": "processing"}, status_code=202)
 
 
@@ -523,14 +532,17 @@ async def retexture_async(uid: str, body: RetextureRequest):
     if not svc.has_t2i:
         raise HTTPException(status_code=503, detail="Text-to-image pipeline required for retexture")
     new_uid = str(uuid.uuid4())
-    celery_app.send_task(
-        "app.tasks_3d.retexture_task",
-        kwargs={
-            "source_uid": uid, "prompt": body.prompt,
-            "seed": body.seed, "output_type": body.type,
-        },
-        task_id=new_uid,
-    )
+    try:
+        celery_app.send_task(
+            "app.tasks_3d.retexture_task",
+            kwargs={
+                "source_uid": uid, "prompt": body.prompt,
+                "seed": body.seed, "output_type": body.type,
+            },
+            task_id=new_uid,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Task queue unavailable: {exc}")
     return JSONResponse({"uid": new_uid, "status": "processing"}, status_code=202)
 
 

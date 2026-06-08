@@ -77,3 +77,23 @@ export interface GeneratedModel {
 }
 
 export type AppView = 'agent' | 'files' | 'settings' | 'image-to-3d' | 'text-to-3d' | 'multiview-to-3d' | 'gallery';
+
+// ---- Execution Tracker Types ----
+export type TrackerState = 'idle' | 'queued' | 'running' | 'completed' | 'failed';
+
+export interface TrackerStep {
+  id: string;
+  label: string;
+  description?: string;
+  icon: string;
+}
+
+export interface TrackerEvent {
+  ts: number;      // Date.now()
+  stage: string;
+  pct: number;
+  worker?: string;
+  queue?: string;
+  message?: string;
+}
+

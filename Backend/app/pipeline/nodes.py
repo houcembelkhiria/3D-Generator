@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import signal
@@ -94,8 +95,9 @@ def validate_parsed_document_node(state: Pipeline3DState) -> dict:
 
 
 def extract_spec_llm_node(state: Pipeline3DState) -> dict:
-    from app.services.llm_service import get_llm_service
+    from app.services.llm_service import get_llm_service, OllamaLLMService
     from app.services.prompt_engineering import get_prompt_engineer
+    from app.models.spec_models import ObjectSpec
 
     retry = state.get("spec_retry_count", 0)
     logger.info("Pipeline: extract_spec_llm (attempt %d)", retry + 1)
@@ -103,11 +105,38 @@ def extract_spec_llm_node(state: Pipeline3DState) -> dict:
     llm = get_llm_service()
     pe = get_prompt_engineer()
 
-    prompt = pe.create_extraction_prompt(state["raw_text"], "document_analysis")
     try:
         with _node_timeout(LG_TIMEOUT_LLM, "extract_spec_llm"):
-            response = llm.generate_response(prompt, max_tokens=1024, temperature=0.7)
-        json_data = llm.extract_json_from_text(response)
+            if isinstance(llm, OllamaLLMService):
+                # Chat path with grammar-constrained JSON. Schema-constrained
+                # decoding guarantees the response validates against ObjectSpec,
+                # so we skip the regex `extract_json_from_text` retry loop.
+                system_text, user_text = pe.create_extraction_messages(
+                    state["raw_text"], "object_spec"
+                )
+                schema = ObjectSpec.model_json_schema()
+                response = llm.generate_chat(
+                    system_text, user_text,
+                    schema=schema, max_tokens=1024, temperature=0.2,
+                )
+            else:
+                # GGUF path - keep the legacy Llama-3-templated prompt.
+                prompt = pe.create_extraction_prompt(state["raw_text"], "document_analysis")
+                response = llm.generate_response(prompt, max_tokens=1024, temperature=0.7)
+
+        # Empty response = real failure, not "valid JSON we just can't find".
+        # Surfacing this loudly triggers the retry router instead of silently
+        # flowing to the fallback spec.
+        if not response or not response.strip():
+            raise RuntimeError("LLM returned empty response")
+
+        # Schema-constrained Ollama output parses directly; legacy path still
+        # needs the regex extractor for code-fenced / explanatory JSON.
+        try:
+            json_data = json.loads(response)
+        except (json.JSONDecodeError, TypeError):
+            json_data = llm.extract_json_from_text(response)
+
         return {
             "spec": json_data,
             "spec_valid": False,
@@ -164,19 +193,97 @@ def validate_spec_node(state: Pipeline3DState) -> dict:
         }
 
 
+# Lines that are email/PDF chrome rather than subject content. The previous
+# fallback picked "Hi team," or "From: artist@studio3d.com" as the object name,
+# which left the t2i prompt with no subject at all -> generic black blob.
+_FALLBACK_SKIP_PREFIXES = (
+    # Email/MIME chrome
+    "from:", "to:", "cc:", "bcc:", "subject:", "date:", "mime-version:",
+    "content-type:", "content-transfer-encoding:", "x-",
+    # Greetings / sign-offs (real subject lines never look like these)
+    "hi ", "hello", "hey ", "dear ", "best ", "regards", "thanks", "thank you",
+    "please ", "sincerely", "cheers",
+    # PDF chrome (page footers, confidentiality boilerplate)
+    "page ", "p.", "confidential", "draft", "rev.", "version ",
+    "copyright", "(c)", "all rights reserved",
+)
+
+
+# Substrings that mark a banner/footer line anywhere on it (not just at the
+# start) — e.g. "ACME Engineering Confidential" or "Spec sheet - DRAFT".
+_FALLBACK_CHROME_SUBSTRINGS = (
+    "confidential", "all rights reserved", "copyright",
+)
+
+import re as _re
+_FALLBACK_PAGE_NUMBER_RE = _re.compile(r"^[\divxlc]+\s*(/|of)\s*[\divxlc]+$", _re.IGNORECASE)
+
+# Tokens that mark a line as describing the subject. First matching line wins
+# its trailing value as the object name.
+# Iteration order matters: explicit asset keys win over email/PDF subject
+# headers, so an eml with both "Subject: Asset Request" and "OBJECT: Crate"
+# picks the latter as the more specific source of truth.
+_FALLBACK_NAME_KEYS = (
+    "object:", "asset:", "product:", "title:", "name:",
+    "subject:",  # email/PDF header - last resort
+)
+
+# Truncation cap for the fallback `description`. Big enough to carry the
+# essential subject signal (materials, dimensions, accents) into the t2i
+# prompt; small enough to stay well under SDXL's CLIP token budget.
+_FALLBACK_DESC_CHARS = 1500
+
+
+def _pick_fallback_name(raw_text: str) -> str:
+    """Choose a meaningful object name from raw document text.
+
+    Strategy: first look for an explicit key line ("OBJECT: X", "TITLE: X").
+    If none, take the first content line that isn't email/PDF chrome.
+    """
+    lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+    # Outer loop is keys, inner loop is lines: this enforces the priority
+    # order in _FALLBACK_NAME_KEYS so "OBJECT:" later in the document beats
+    # "Subject:" in the email header.
+    for key in _FALLBACK_NAME_KEYS:
+        for line in lines:
+            low = line.lower()
+            if low.startswith(key):
+                value = line[len(key):].strip(" :-\t")
+                if value:
+                    return value[:60]
+    for line in lines:
+        low = line.lower()
+        if any(low.startswith(p) for p in _FALLBACK_SKIP_PREFIXES):
+            continue
+        if any(kw in low for kw in _FALLBACK_CHROME_SUBSTRINGS):
+            continue
+        if _FALLBACK_PAGE_NUMBER_RE.match(low):
+            continue
+        if len(line) >= 8 and not line.startswith("---"):
+            return line[:60]
+    return "3D Object"
+
+
 def build_fallback_spec_node(state: Pipeline3DState) -> dict:
+    """Hand-crafted spec used after LLM retry exhaustion.
+
+    Two changes from the original `{Plastic, Matte Black}` cube:
+    - `name` is picked via _pick_fallback_name so it carries subject signal
+      instead of "Hi team," or "From:" headers.
+    - `description` carries the full raw_text (truncated) so the downstream
+      t2i prompt builder still sees "wooden crate, planks, oak..." even when
+      every LLM call returned garbage. Material defaults are unchanged to
+      keep behaviour identical for runs that previously succeeded.
+    """
     logger.info("Pipeline: building fallback spec")
-    raw_text = state.get("raw_text", "")
-    title = "3D Object"
-    for line in raw_text.split("\n"):
-        line = line.strip()
-        if len(line) > 5:
-            title = line[:60]
-            break
+    raw_text = state.get("raw_text", "") or ""
+    title = _pick_fallback_name(raw_text)
+    description = raw_text.strip()[:_FALLBACK_DESC_CHARS]
 
     return {
         "spec": {
             "name": title,
+            "description": description,
             "shape": "CUSTOM",
             "dimensions": {"length": 100, "width": 100, "height": 100, "unit": "mm"},
             "material": {"type": "Plastic", "color": "Matte Black"},
@@ -200,17 +307,38 @@ def generate_mesh_node(state: Pipeline3DState) -> dict:
     if isinstance(mat, dict):
         material_str = f"{mat.get('type', '')} {mat.get('color', '')}".strip()
 
-    text_prompt = f"A detailed 3D model of {name.lower()}"
+    # Build a rich prompt from all spec fields so Hunyuan3D generates the described object
+    dims = spec.get("dimensions", {})
+    shape = spec.get("shape", "")
+    hollow = spec.get("hollow", False)
+
+    parts = [f"A detailed 3D model of {name.lower()}"]
     if description:
-        text_prompt += f", {description.lower()}"
+        parts.append(description.lower())
+    if shape and shape.upper() not in ("CUSTOM", ""):
+        parts.append(f"{shape.lower()} shape")
+    if dims:
+        unit = dims.get("unit", "mm")
+        d_parts = []
+        for k in ("length", "width", "height", "diameter"):
+            v = dims.get(k)
+            if v:
+                d_parts.append(f"{v}{unit} {k}")
+        if d_parts:
+            parts.append("dimensions: " + " x ".join(d_parts))
     if material_str:
-        text_prompt += f", made of {material_str.lower()}"
-    text_prompt += ", high quality, professional 3D rendering"
+        parts.append(f"made of {material_str.lower()}")
+    if hollow:
+        parts.append("hollow interior")
+    parts.append("high quality, professional 3D rendering")
+
+    text_prompt = ", ".join(parts)
 
     try:
+        texture_enabled = state.get("texture_enabled", True)
         service = get_hunyuan3d()
         with _node_timeout(LG_TIMEOUT_MESH, "generate_mesh"):
-            result = service.text_to_3d(text_prompt)
+            result = service.text_to_3d(text_prompt, texture=texture_enabled)
         return {
             "mesh_output": result,
             "mesh_valid": False,

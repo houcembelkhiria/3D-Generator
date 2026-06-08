@@ -10,7 +10,11 @@ import { ImageTo3D } from './components/ImageTo3D';
 import { TextTo3D } from './components/TextTo3D';
 import { MultiViewTo3D } from './components/MultiViewTo3D';
 import { ModelGallery } from './components/ModelGallery';
+import { ModelViewer3D } from './components/ModelViewer3D';
 import { API_BASE } from './api';
+import { useLangGraphTracker } from './hooks/useLangGraphTracker';
+import { ExecutionTracker } from './components/ExecutionTracker';
+import { LANGGRAPH_STEPS } from './lib/pipelines';
 import { IconUpload, IconBox, IconCpu, IconDatabase, IconSettings, IconActivity, IconCheckCircle, IconMessageSquare, IconPaperclip, IconX, IconFileText } from './components/Icons';
 
 // Mock Data for "Step B: Extraction"
@@ -210,6 +214,54 @@ export default function App() {
     }
   }, [systemStatus.hunyuan3dReady, fetchGallery]);
 
+  // ── Agent view: real LangGraph backend ────────────────────────────────
+  const [agentTaskId, setAgentTaskId] = useState<string | null>(null);
+  const [agentFile, setAgentFile] = useState<File | null>(null);
+  const [textureEnabled, setTextureEnabled] = useState(false);
+  const agentFileInputRef = useRef<HTMLInputElement>(null);
+  const agentStartMs = useRef<number>(0);
+  const [agentElapsed, setAgentElapsed] = useState(0);
+  const agentTracker = useLangGraphTracker(agentTaskId);
+
+  const isAgentProcessing = agentTracker.trackerState === 'queued' || agentTracker.trackerState === 'running';
+
+  useEffect(() => {
+    if (!isAgentProcessing) return;
+    const id = setInterval(() => setAgentElapsed(Math.floor((Date.now() - agentStartMs.current) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [isAgentProcessing]);
+
+  const agentLogs: ProcessLog[] = agentTracker.events.map(ev => ({
+    id: `${ev.ts}-${ev.stage}`,
+    timestamp: new Date(ev.ts).toLocaleTimeString('fr-FR', { hour12: false, fractionalSecondDigits: 2 } as any),
+    step: PipelineStep.EXTRACTION,
+    message: ev.message && ev.message !== ev.stage ? `[${ev.stage}] ${ev.message}` : ev.stage,
+    type: (ev.stage === 'failed' ? 'error' : ev.stage === 'store_result' ? 'success' : 'info') as ProcessLog['type'],
+  }));
+
+  const handleProcessDoc = async () => {
+    if (!agentFile) return;
+    setAgentTaskId(null);
+    agentStartMs.current = Date.now();
+    setAgentElapsed(0);
+    const fd = new FormData();
+    fd.append('file', agentFile);
+    fd.append('texture', String(textureEnabled));
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/run-pipeline`, { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        addLog(`Pipeline error: ${err.detail}`, 'error');
+        return;
+      }
+      const data = await res.json();
+      agentStartMs.current = Date.now();
+      setAgentTaskId(data.task_id);
+    } catch (e: any) {
+      addLog(`Network error: ${e.message}`, 'error');
+    }
+  };
+
   const addMockFile = () => {
     const mockFiles = ["specifications_v1.pdf", "asset_reference.jpg", "mechanics.xml"];
     const randomFile = mockFiles[Math.floor(Math.random() * mockFiles.length)];
@@ -398,18 +450,16 @@ export default function App() {
                     {/* Chat Input Container */}
                     <div className={`input-container transition-all ${isProcessing ? 'opacity-50' : 'focus-within:ring-1 focus-within:ring-[#FF8C66] focus-within:border-[#FF8C66]'}`}>
 
-                        {/* Attached Files Display */}
-                        {files.length > 0 && (
+                        {/* Attached File Display */}
+                        {agentFile && (
                           <div className="px-3 pt-3 flex flex-wrap gap-2">
-                            {files.map((f, i) => (
-                              <div key={i} className="flex items-center gap-2 bg-theme-input px-2 py-1 rounded-md text-xs text-theme-secondary border border-theme-secondary animate-fadeIn">
-                                <IconFileText className="w-3 h-3 text-[#7C3AED]" />
-                                <span className="max-w-[150px] truncate">{f}</span>
-                                <button onClick={() => removeFile(i)} className="hover:text-red-400 transition-colors" disabled={isProcessing}>
-                                  <IconX className="w-3 h-3"/>
-                                </button>
-                              </div>
-                            ))}
+                            <div className="flex items-center gap-2 bg-theme-input px-2 py-1 rounded-md text-xs text-theme-secondary border border-theme-secondary animate-fadeIn">
+                              <IconFileText className="w-3 h-3 text-[#7C3AED]" />
+                              <span className="max-w-[150px] truncate">{agentFile.name}</span>
+                              <button onClick={() => setAgentFile(null)} className="hover:text-red-400 transition-colors" disabled={isAgentProcessing}>
+                                <IconX className="w-3 h-3"/>
+                              </button>
+                            </div>
                           </div>
                         )}
 
@@ -425,11 +475,18 @@ export default function App() {
                         {/* Toolbar */}
                         <div className="flex items-center justify-between px-2 pb-2 border-t border-theme pt-2 mx-2">
                           <div className="flex gap-1">
+                              <input
+                                ref={agentFileInputRef}
+                                type="file"
+                                accept=".pdf,.eml"
+                                className="hidden"
+                                onChange={e => { const f = e.target.files?.[0]; if (f) setAgentFile(f); e.target.value = ''; }}
+                              />
                               <button
-                                onClick={addMockFile}
-                                disabled={isProcessing}
+                                onClick={() => agentFileInputRef.current?.click()}
+                                disabled={isAgentProcessing}
                                 className="p-2 text-theme-muted hover:text-theme-secondary hover:bg-theme-input rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="Attach File"
+                                title="Attach PDF or EML"
                               >
                                 <IconPaperclip className="w-5 h-5" />
                               </button>
@@ -437,27 +494,31 @@ export default function App() {
 
                           <div className="flex gap-2">
                               <button
-                                onClick={() => handleProcess(GenerationMethod.PROCEDURAL)}
-                                disabled={isProcessing}
+                                onClick={handleProcessDoc}
+                                disabled={isAgentProcessing || !agentFile}
                                 className="px-3 py-1.5 bg-[#FF8C66] hover:bg-[#ff7a4d] disabled:opacity-50 disabled:cursor-not-allowed text-black rounded-lg text-xs font-bold transition-all shadow-lg shadow-[#FF8C66]/10 flex items-center gap-1"
                               >
-                                <IconCpu className="w-3 h-3" />
-                                Code
-                              </button>
-                              <button
-                                onClick={() => handleProcess(GenerationMethod.VISUAL)}
-                                disabled={isProcessing}
-                                className="px-3 py-1.5 bg-[#7C3AED] hover:bg-[#6d28d9] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-[#7C3AED]/10 flex items-center gap-1"
-                              >
                                 <IconBox className="w-3 h-3" />
-                                Visual
+                                Process Document
                               </button>
                           </div>
                         </div>
                     </div>
 
-                    <div className="mt-4 text-[10px] text-theme-muted font-mono text-center">
-                      AI Model: Llama-3-8B-Instruct (Local)
+                    <div className="mt-3 flex items-center gap-2 px-1">
+                      <label className="flex items-center gap-2 text-xs text-theme-secondary cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={textureEnabled}
+                          onChange={e => setTextureEnabled(e.target.checked)}
+                          disabled={isAgentProcessing}
+                          className="accent-[#7C3AED] w-3.5 h-3.5 disabled:opacity-50"
+                        />
+                        Generate with texture
+                      </label>
+                    </div>
+                    <div className="mt-2 text-[10px] text-theme-muted font-mono text-center">
+                      AI Model: Ollama / local LLM  ·  3D: Hunyuan3D
                     </div>
                   </div>
                 </div>
@@ -468,15 +529,30 @@ export default function App() {
                 <div className="card p-6">
                   <h2 className="text-lg font-bold text-heading mb-6 flex items-center justify-between">
                     <span>Pipeline Status</span>
-                    {currentStep !== PipelineStep.IDLE && currentStep !== PipelineStep.COMPLETED && (
+                    {isAgentProcessing && (
                       <span className="text-xs font-mono text-[#FF8C66] animate-pulse">PROCESSING...</span>
                     )}
                   </h2>
-                  <PipelineVisualizer currentStep={currentStep} generationMethod={metadata?.generationMethod} />
+                  {agentTaskId ? (
+                    <ExecutionTracker
+                      taskId={agentTaskId}
+                      queue={agentTracker.queue}
+                      worker={agentTracker.worker}
+                      steps={LANGGRAPH_STEPS}
+                      currentStepId={agentTracker.currentStage}
+                      events={agentTracker.events}
+                      elapsedSec={agentElapsed}
+                      state={agentTracker.trackerState}
+                      error={agentTracker.error}
+                      title={agentFile?.name}
+                    />
+                  ) : (
+                    <PipelineVisualizer currentStep={currentStep} generationMethod={metadata?.generationMethod} />
+                  )}
                 </div>
 
                 <div className="flex-1 min-h-[300px]">
-                  <Terminal logs={logs} onClear={clearLogs} />
+                  <Terminal logs={agentTaskId ? agentLogs : logs} onClear={agentTaskId ? undefined : clearLogs} />
                 </div>
               </section>
 
@@ -484,38 +560,90 @@ export default function App() {
               <section className="lg:col-span-4 space-y-6">
                 <div className="card p-6 h-full flex flex-col">
                   <h2 className="text-lg font-bold text-heading mb-4 flex items-center">
-                    <IconDatabase className="mr-2 text-[#7C3AED]" /> Extracted Metadata
+                    <IconDatabase className="mr-2 text-[#7C3AED]" /> Pipeline Result
                   </h2>
 
-                  {metadata ? (
-                    <div className="flex-1 space-y-4">
-                      <div className="bg-theme-input p-4 rounded-xl border border-theme font-mono text-xs text-[#7C3AED] overflow-x-auto">
-                          <pre>{JSON.stringify(metadata, null, 2)}</pre>
-                      </div>
+                  {(() => {
+                    const mi = agentTracker.result?.model_info ?? agentTracker.result;
+                    const rawUrl: string | undefined = mi?.preview_url ?? mi?.download_url;
+                    const glbUrl = rawUrl
+                      ? (rawUrl.startsWith('/') ? `${API_BASE}${rawUrl}` : rawUrl)
+                      : undefined;
+                    const dlUrl = mi?.download_url
+                      ? (mi.download_url.startsWith('/') ? `${API_BASE}${mi.download_url}` : mi.download_url)
+                      : glbUrl;
 
-                      <div className="bg-theme-input p-4 rounded-xl border border-theme flex flex-col items-center">
-                          <div className="text-xs text-muted mb-2 w-full text-left uppercase tracking-wider">Asset Preview</div>
-                          <div className="w-full aspect-square bg-theme-secondary rounded-lg flex items-center justify-center border border-theme relative overflow-hidden group">
-                            <img
-                              src={`https://picsum.photos/400/400?random=${metadata.name}`}
-                              alt="Asset Preview"
-                              className="opacity-50 grayscale group-hover:grayscale-0 transition-all duration-500"
-                            />
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <span className="px-3 py-1 bg-theme-primary/80 text-theme-primary text-xs rounded border border-theme backdrop-blur-md">
-                                  {metadata.generationMethod === GenerationMethod.PROCEDURAL ? 'C# SCRIPT GENERATED' : '.GLB MESH GENERATED'}
-                                </span>
-                            </div>
+                    if (glbUrl) {
+                      return (
+                        <div className="flex-1 flex flex-col gap-3 min-h-0">
+                          <ModelViewer3D src={glbUrl} alt={mi?.title ?? 'Generated 3D Model'} className="flex-1" />
+                          <div className="flex gap-2">
+                            {dlUrl && (
+                              <a
+                                href={dlUrl}
+                                download
+                                className="flex-1 text-center px-3 py-1.5 bg-[#7C3AED] hover:bg-[#6d28d9] text-white rounded-lg text-xs font-bold transition-colors"
+                              >
+                                ⬇ Download GLB
+                              </a>
+                            )}
                           </div>
+                          <details className="text-[10px] font-mono">
+                            <summary className="cursor-pointer text-theme-muted hover:text-theme-primary py-1">
+                              View pipeline details
+                            </summary>
+                            <div className="bg-theme-input p-3 rounded-lg border border-theme text-[#7C3AED] overflow-x-auto mt-1 max-h-40 overflow-y-auto">
+                              <pre>{JSON.stringify(agentTracker.result, null, 2)}</pre>
+                            </div>
+                          </details>
+                        </div>
+                      );
+                    }
+
+                    // Three completion-without-result cases the user needs to
+                    // tell apart:
+                    //  (a) task still running -> orange spinner copy
+                    //  (b) task completed but model_info has no URLs -> mesh
+                    //      gen quietly failed; show the recorded error so the
+                    //      user doesn't sit waiting for a non-existent GLB
+                    //  (c) idle / no task -> the usual call to action
+                    const trackerErrors: string[] = (agentTracker.result as any)?.errors ?? [];
+                    const meshError = trackerErrors.find(e => /mesh generation/i.test(e));
+                    const showRunning = agentTaskId && (agentTracker.trackerState === 'running' || agentTracker.trackerState === 'queued');
+                    const showFailure = agentTaskId
+                      && (agentTracker.trackerState === 'completed' || agentTracker.trackerState === 'failed')
+                      && !glbUrl;
+                    return (
+                      <div className="flex-1 flex flex-col items-center justify-center text-muted text-center px-4">
+                        <IconDatabase className="w-16 h-16 mb-4 opacity-20" />
+                        {showRunning ? (
+                          <p className="text-sm text-[#FF8C66] animate-pulse">Pipeline running…</p>
+                        ) : showFailure ? (
+                          <>
+                            <p className="text-sm font-semibold text-red-400">Pipeline finished, but no 3D model was produced.</p>
+                            {(agentTracker.error || meshError) && (
+                              <p className="text-xs mt-2 text-theme-muted font-mono break-words max-w-xs">
+                                {agentTracker.error ?? meshError}
+                              </p>
+                            )}
+                            {trackerErrors.length > 0 && !agentTracker.error && !meshError && (
+                              <p className="text-xs mt-2 text-theme-muted font-mono break-words max-w-xs">
+                                {trackerErrors[trackerErrors.length - 1]}
+                              </p>
+                            )}
+                            <p className="text-[10px] mt-3 text-theme-muted">
+                              Check the FastAPI / Celery worker logs for the failing step. Retry after addressing the cause.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p>No result yet.</p>
+                            <p className="text-sm mt-1">Attach a PDF or EML and click Process Document.</p>
+                          </>
+                        )}
                       </div>
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center text-muted">
-                      <IconDatabase className="w-16 h-16 mb-4 opacity-20" />
-                      <p>No metadata extracted yet.</p>
-                      <p className="text-sm">Waiting for pipeline Step B...</p>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </section>
             </div>

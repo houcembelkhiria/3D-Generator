@@ -1,0 +1,43 @@
+From: artist@studio3d.com
+To: pipeline@3dgenerator.local
+Subject: Asset Request - Wooden Storage Crate
+Date: Mon, 01 Jun 2024 10:30:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi team,
+
+Please generate a 3D model for the following asset:
+
+OBJECT: Wooden Storage Crate
+DESCRIPTION: A classic wooden shipping crate with visible planks, metal corner brackets, and rope handles. Suitable for a warehouse or pirate scene environment.
+
+DIMENSIONS:
+- Length: 600 mm
+- Width: 400 mm  
+- Height: 350 mm
+- Plank thickness: 20 mm
+- Unit: mm
+
+SHAPE: Cube / rectangular box
+HOLLOW: Yes (open top or sealed with lid, either is fine)
+
+MATERIAL:
+- Primary: Wood (Oak, weathered finish)
+- Color: Custom (aged brown with grey weathering)
+- Texture: Rough wood grain with knots and cracks
+- Accents: Metal corner brackets in Brushed Metal finish
+
+WEIGHT ESTIMATE: 3500 grams (when empty)
+QUANTITY: 3 units (slightly varied weathering per unit)
+
+ADDITIONAL NOTES:
+- Should have visible nails/screws
+- Stencilled text "FRAGILE" on one side would be ideal
+- Target use: Unity HDRP real-time environment prop
+- Polygon budget: ~8,000 triangles per unit
+
+Please let me know if you need any clarification.
+
+Best regards,
+Art Department

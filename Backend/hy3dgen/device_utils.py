@@ -82,7 +82,8 @@ class DeviceManager:
 
     def generator(self, seed: int) -> torch.Generator:
         """Create a seeded generator on the correct device."""
-        return torch.Generator(device=self.device).manual_seed(seed)
+        gen_device = "cpu" if str(self.device) == "mps" else self.device
+        return torch.Generator(device=gen_device).manual_seed(seed)
 
     def cpu_generator(self, seed: int) -> torch.Generator:
         """Create a CPU generator (for pipelines that require it)."""

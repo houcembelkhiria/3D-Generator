@@ -1,6 +1,6 @@
 import shutil
 import magic
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, status
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -644,6 +644,7 @@ class PipelineRunResponse(BaseModel):
 )
 async def run_pipeline(
     file: UploadFile = File(..., description="PDF or EML document"),
+    texture: bool = Form(True),
 ):
     allowed_types = ["application/pdf", "message/rfc822"]
     if file.content_type not in allowed_types:
@@ -662,7 +663,7 @@ async def run_pipeline(
 
     celery_app.send_task(
         "app.tasks.run_pipeline",
-        args=[file_path, file.content_type],
+        args=[file_path, file.content_type, texture],
         task_id=file_id,
     )
 

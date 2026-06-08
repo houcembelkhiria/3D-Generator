@@ -113,10 +113,11 @@ class Light_Shadow_Remover:
 
         pipe_image = image.convert('RGB') if image.mode != 'RGB' else image
 
+        gen_device = "cpu" if str(self.device) == "mps" else self.device
         image = self.pipeline(
             prompt="",
             image=pipe_image,
-            generator=torch.Generator(device=self.device).manual_seed(42),
+            generator=torch.Generator(device=gen_device).manual_seed(42),
             height=512,
             width=512,
             num_inference_steps=num_inference_steps,

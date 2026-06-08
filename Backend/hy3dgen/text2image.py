@@ -127,7 +127,8 @@ class HunyuanDiTPipeline:
         torch.set_float32_matmul_precision('high')
         self.pipe.transformer = torch.compile(self.pipe.transformer, fullgraph=True)
         # self.pipe.vae.decode = torch.compile(self.pipe.vae.decode, fullgraph=True)
-        generator = torch.Generator(device=self.pipe.device)  # infer once for hot-start
+        gen_device = "cpu" if str(self.pipe.device) == "mps" else self.pipe.device
+        generator = torch.Generator(device=gen_device)  # infer once for hot-start
         out_img = self.pipe(
             prompt='sailor moon',
             negative_prompt='blurry',
@@ -142,7 +143,8 @@ class HunyuanDiTPipeline:
     @torch.no_grad()
     def __call__(self, prompt, seed=0, num_inference_steps=10):
         seed_everything(seed)
-        generator = torch.Generator(device=self.device)
+        gen_device = "cpu" if str(self.device) == "mps" else self.device
+        generator = torch.Generator(device=gen_device)
         generator = generator.manual_seed(int(seed))
         # Build prompt: put user intent first, then style hints.
         # No truncation — HunyuanDiT tokenizer caps at 77 tokens automatically.
@@ -283,7 +285,8 @@ class SDXLHyperPipeline:
     @torch.no_grad()
     def __call__(self, prompt, seed=0, num_inference_steps=4):
         seed_everything(seed)
-        generator = torch.Generator(device=self.device).manual_seed(int(seed))
+        gen_device = "cpu" if str(self.device) == "mps" else self.device
+        generator = torch.Generator(device=gen_device).manual_seed(int(seed))
         full_prompt = f"a detailed 3D render of a {prompt.strip()}{self.POS_TEMPLATE}"
         out_img = self.pipe(
             prompt=full_prompt,

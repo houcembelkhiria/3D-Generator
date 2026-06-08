@@ -22,6 +22,10 @@ export interface TaskMeta {
   recent_errors?: string[];
   thread_id?: string;
   resumed?: boolean;
+  node_history?: string[];
+  worker?: string;
+  queue?: string;
+  ts?: number;
 }
 
 export interface TaskPollResult<T = any> {

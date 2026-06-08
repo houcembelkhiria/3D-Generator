@@ -19,6 +19,7 @@ celery_app.control.revoke(uid, terminate=True, signal='SIGTERM').
 """
 
 import logging
+import time
 from pathlib import Path
 
 from app.worker import celery_app
@@ -27,17 +28,24 @@ logger = logging.getLogger(__name__)
 
 
 def _set_progress(task, stage: str, pct: int, **extra):
-    """Report progress in the shape the WebSocket expects: {stage, pct, ...}."""
-    meta = {"stage": stage, "pct": pct, **extra}
+    """Report progress with Celery/Redis metadata so the frontend tracker can
+    display the task ID, worker hostname, queue name, and live stage."""
+    delivery = task.request.delivery_info or {}
+    meta = {
+        "stage": stage,
+        "pct": pct,
+        "task_id": task.request.id,
+        "worker": task.request.hostname,
+        "queue": delivery.get("routing_key", "3d_generation"),
+        "ts": time.time(),
+        **extra,
+    }
     task.update_state(state="PROCESSING", meta=meta)
 
 
 def _persist_to_gallery(uid: str, result: dict, prompt: str = "",
                         source: str = "image-to-3d", has_texture: bool = False) -> None:
-    """Compute file stats then write one row to gallery DB.
-    Mirrors the previous in-process implementation so the gallery contract
-    is unchanged from the frontend's perspective.
-    """
+    """Compute file stats then write one row to gallery DB."""
     from app.services import gallery_db
     glb_path = Path("generated/3d_outputs") / f"{uid}.glb"
     if glb_path.exists():
@@ -79,23 +87,24 @@ def image_to_3d_task(self, image_b64: str, seed: int = 1234,
     """Run hunyuan3d.image_to_3d in a Celery worker process."""
     from app.services.hunyuan3d_service import get_hunyuan3d
     uid = self.request.id
-    _set_progress(self, "started", 0)
+    _set_progress(self, "received", 2)
     try:
-        _set_progress(self, "generating", 10)
+        _set_progress(self, "loading_model", 8)
         svc = get_hunyuan3d()
+        _set_progress(self, "generating_shape", 20)
         result = svc.image_to_3d(
             image_b64=image_b64, seed=seed, steps=num_inference_steps,
             guidance_scale=guidance_scale, octree_resolution=octree_resolution,
             num_chunks=num_chunks, texture=texture, face_count=face_count,
             output_type=output_type,
         )
+        _set_progress(self, "saving", 90)
         result_uid = result.get("uid", uid)
         _persist_to_gallery(result_uid, result, source="image-to-3d", has_texture=texture)
         self.update_state(state="SUCCESS", meta={"stage": "completed", "pct": 100, **result})
         return {"status": "completed", **result}
     except Exception as exc:
         logger.exception("image_to_3d_task %s failed", uid)
-        self.update_state(state="FAILURE", meta={"stage": "failed", "pct": 0, "error": str(exc)})
         raise
 
 
@@ -108,16 +117,18 @@ def text_to_3d_task(self, text: str, seed: int = 1234,
     """Run hunyuan3d.text_to_3d in a Celery worker process."""
     from app.services.hunyuan3d_service import get_hunyuan3d
     uid = self.request.id
-    _set_progress(self, "started", 0)
+    _set_progress(self, "received", 2)
     try:
-        _set_progress(self, "generating", 10)
+        _set_progress(self, "loading_model", 8)
         svc = get_hunyuan3d()
+        _set_progress(self, "generating_shape", 20)
         result = svc.text_to_3d(
             text=text, seed=seed, steps=num_inference_steps,
             guidance_scale=guidance_scale, octree_resolution=octree_resolution,
             num_chunks=num_chunks, texture=texture, face_count=face_count,
             output_type=output_type, t2i_model=t2i_model,
         )
+        _set_progress(self, "saving", 90)
         result_uid = result.get("uid", uid)
         _persist_to_gallery(result_uid, result, prompt=text,
                             source="text-to-3d", has_texture=texture)
@@ -125,7 +136,6 @@ def text_to_3d_task(self, text: str, seed: int = 1234,
         return {"status": "completed", **result}
     except Exception as exc:
         logger.exception("text_to_3d_task %s failed", uid)
-        self.update_state(state="FAILURE", meta={"stage": "failed", "pct": 0, "error": str(exc)})
         raise
 
 
@@ -138,23 +148,24 @@ def multiview_to_3d_task(self, views: dict, seed: int = 1234,
     """Run hunyuan3d.multiview_to_3d in a Celery worker process."""
     from app.services.hunyuan3d_service import get_hunyuan3d
     uid = self.request.id
-    _set_progress(self, "started", 0)
+    _set_progress(self, "received", 2)
     try:
-        _set_progress(self, "generating", 10)
+        _set_progress(self, "loading_model", 8)
         svc = get_hunyuan3d()
+        _set_progress(self, "generating_shape", 20)
         result = svc.multiview_to_3d(
             views=views, seed=seed, steps=num_inference_steps,
             guidance_scale=guidance_scale, octree_resolution=octree_resolution,
             num_chunks=num_chunks, texture=texture, face_count=face_count,
             output_type=output_type,
         )
+        _set_progress(self, "saving", 90)
         result_uid = result.get("uid", uid)
         _persist_to_gallery(result_uid, result, source="multiview-to-3d", has_texture=texture)
         self.update_state(state="SUCCESS", meta={"stage": "completed", "pct": 100, **result})
         return {"status": "completed", **result}
     except Exception as exc:
         logger.exception("multiview_to_3d_task %s failed", uid)
-        self.update_state(state="FAILURE", meta={"stage": "failed", "pct": 0, "error": str(exc)})
         raise
 
 
@@ -164,11 +175,13 @@ def retexture_task(self, source_uid: str, prompt: str, seed: int = 1234,
     """Run hunyuan3d.retexture in a Celery worker process."""
     from app.services.hunyuan3d_service import get_hunyuan3d
     uid = self.request.id
-    _set_progress(self, "started", 0)
+    _set_progress(self, "received", 2)
     try:
-        _set_progress(self, "generating", 10)
+        _set_progress(self, "loading_model", 8)
         svc = get_hunyuan3d()
+        _set_progress(self, "generating_shape", 20)
         result = svc.retexture(uid=source_uid, prompt=prompt, seed=seed, out_type=output_type)
+        _set_progress(self, "saving", 90)
         result_uid = result.get("uid", uid)
         _persist_to_gallery(result_uid, result, prompt=prompt,
                             source="retexture", has_texture=True)
@@ -176,5 +189,4 @@ def retexture_task(self, source_uid: str, prompt: str, seed: int = 1234,
         return {"status": "completed", **result}
     except Exception as exc:
         logger.exception("retexture_task %s failed", uid)
-        self.update_state(state="FAILURE", meta={"stage": "failed", "pct": 0, "error": str(exc)})
         raise

@@ -3,7 +3,7 @@
   backend frontend dev \
   setup-v2 setup-backend-v2 setup-frontend-v2 \
   backend-v2 frontend-v2 dev-v2 \
-  docker docker-down docker-v2 docker-v2-down \
+  docker docker-down docker-v2 docker-v2-down docker-v2-down \
   clean clean-v2
 
 # ──────────────────────────────────────────────
@@ -33,7 +33,10 @@ frontend: Frontend/node_modules
 
 dev: Backend/venv Frontend/node_modules
 	@trap 'kill 0' EXIT; \
-	(cd Backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000) & \
+	/opt/homebrew/opt/redis/bin/redis-server --port 9501 --daemonize no > /dev/null 2>&1 & \
+	sleep 1; redis-cli -p 9501 FLUSHALL 2>/dev/null || true; \
+	(cd Backend && source venv/bin/activate && OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES celery -A app.worker worker --loglevel=info --pool=solo -Q document_processing,3d_generation 2>&1 | sed 's/^/[celery] /') & \
+	(cd Backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000 2>&1 | sed 's/^/[uvicorn] /') & \
 	(cd Frontend && npm run dev) & \
 	wait
 
@@ -64,7 +67,7 @@ frontend-v2: Frontend-v2/node_modules
 
 dev-v2: Backend-v2/venv Frontend-v2/node_modules
 	@trap 'kill 0' EXIT; \
-	(cd Backend-v2 && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8001) & \
+(cd Backend-v2 && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8001) & \
 	(cd Frontend-v2 && npm run dev) & \
 	wait
 

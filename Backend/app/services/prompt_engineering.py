@@ -30,25 +30,58 @@ IMPORTANT RULES:
 9. Include confidence scores when relevant
 10. Flag any ambiguities or uncertainties in the warnings field"""
     
+    # PDFs can be 30+ pages. Spec extraction is info-dense and the relevant
+    # content (dimensions, materials, names) sits near the top. 12000 chars
+    # ~= 3K tokens, leaves ample headroom under an 8K context window while
+    # capping KV-cache RAM on a 3-4B SLM at ~2.5 GB.
+    MAX_DOCUMENT_CHARS = 12000
+
+    def _truncate_document(self, document_text: str) -> str:
+        if len(document_text) <= self.MAX_DOCUMENT_CHARS:
+            return document_text
+        return document_text[: self.MAX_DOCUMENT_CHARS] + "\n[...document truncated for context budget...]"
+
+    def _task_description(self, target_schema: str) -> tuple[str, Dict[str, Any]]:
+        if target_schema == "object_spec":
+            return (
+                "Extract precise 3D object specifications from the technical document. "
+                "Focus on dimensions, materials, and measurable properties.",
+                ObjectSpec.model_config["json_schema_extra"]["example"],
+            )
+        return (
+            "Perform comprehensive analysis of the technical document. "
+            "Extract all 3D object specifications and any tabular data present.",
+            DocumentAnalysis.model_config["json_schema_extra"]["example"],
+        )
+
+    def create_extraction_messages(
+        self, document_text: str, target_schema: str = "object_spec"
+    ) -> tuple[str, str]:
+        """Return `(system_text, user_text)` for use with Ollama `/api/chat`.
+
+        Ollama applies the per-model chat template server-side, so the same
+        messages work across Qwen, Llama, Mistral, Phi, Gemma. Pair this with
+        `OllamaLLMService.generate_chat(schema=<json-schema>)` to get
+        grammar-constrained JSON output.
+        """
+        task_description, schema_example = self._task_description(target_schema)
+        document_text = self._truncate_document(document_text)
+        system_text = (
+            f"{self.system_instructions}\n\n"
+            f"TASK: {task_description}\n\n"
+            f"RESPONSE FORMAT:\n{json.dumps(schema_example, indent=2)}"
+        )
+        user_text = f"DOCUMENT TEXT:\n{document_text}"
+        return system_text, user_text
+
     def create_extraction_prompt(self, document_text: str, target_schema: str = "object_spec") -> str:
         """
-        Create a prompt for extracting structured information from document text.
-        
-        Args:
-            document_text: The cleaned document text to analyze
-            target_schema: Target schema type ("object_spec" or "document_analysis")
-            
-        Returns:
-            Formatted prompt string ready for LLM
+        Llama-3-templated single-string prompt for the GGUF `LLMService` path.
+        New callers should prefer `create_extraction_messages` + `generate_chat`
+        so the prompt is portable across Ollama model families.
         """
-        if target_schema == "object_spec":
-            schema_example = ObjectSpec.model_config["json_schema_extra"]["example"]
-            task_description = "Extract precise 3D object specifications from the technical document. Focus on dimensions, materials, and measurable properties."
-        else:  # document_analysis
-            schema_example = DocumentAnalysis.model_config["json_schema_extra"]["example"]
-            task_description = "Perform comprehensive analysis of the technical document. Extract all 3D object specifications and any tabular data present."
-        
-        # Build the prompt
+        task_description, schema_example = self._task_description(target_schema)
+        document_text = self._truncate_document(document_text)
         prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {self.system_instructions}
@@ -64,7 +97,7 @@ DOCUMENT TEXT:
 {document_text}
 
 <|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
-        
+
         return prompt
     
     def create_table_extraction_prompt(self, table_text: str) -> str:

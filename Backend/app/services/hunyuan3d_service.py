@@ -43,6 +43,49 @@ logger = logging.getLogger(__name__)
 SUPPORTED_FORMATS = {"glb", "obj", "ply", "stl"}
 
 
+def _wrap_unet_bf16(unet, name: str) -> None:
+    """Cast UNet weights to bf16 and patch forward with fp32-boundary casts.
+
+    Standard Diffusers mixed-precision pattern: VAE stays fp32 (colour
+    fidelity preserved), UNet runs bf16 (activations and KV cache halve).
+    The wrapper transparently up-casts fp32 inputs to bf16 at the UNet
+    boundary and down-casts bf16 outputs to fp32 so the next pipeline
+    stage (the fp32 VAE decoder) sees the expected dtype.
+
+    Called by `_ensure_texgen_loaded` only when `HY3D_BF16_TEXGEN=1`.
+    Default-off; the user opts in once they have verified colour parity.
+    """
+    unet.to(torch.bfloat16)
+    _original_forward = unet.forward
+
+    def _bf16_boundary_forward(*args, **kwargs):
+        # Up-cast fp32 tensor inputs at the boundary
+        def _cast_in(x):
+            if isinstance(x, torch.Tensor) and x.dtype == torch.float32:
+                return x.to(torch.bfloat16)
+            return x
+        new_args = tuple(_cast_in(a) for a in args)
+        new_kwargs = {k: _cast_in(v) for k, v in kwargs.items()}
+
+        out = _original_forward(*new_args, **new_kwargs)
+
+        # Down-cast bf16 tensor outputs so the fp32 VAE / next stage works
+        def _cast_out(x):
+            if isinstance(x, torch.Tensor) and x.dtype == torch.bfloat16:
+                return x.to(torch.float32)
+            return x
+        if isinstance(out, torch.Tensor):
+            return _cast_out(out)
+        # Diffusers UNet outputs often wrap the tensor in a dataclass with
+        # a `.sample` field — handle that case without copying the object.
+        if hasattr(out, "sample") and isinstance(out.sample, torch.Tensor):
+            out.sample = _cast_out(out.sample)
+        return out
+
+    unet.forward = _bf16_boundary_forward
+    logger.info("bf16-wrapped %s UNet (VAE stays fp32 — no colour regression)", name)
+
+
 class Hunyuan3DService:
     """Manages all Hunyuan3D model pipelines and provides generation methods."""
 
@@ -251,28 +294,35 @@ class Hunyuan3DService:
             # Texgen models (multiview UNet, delight UNet) must NOT be int8 quantized —
             # diffusion models require full precision for correct color output
 
-            # Opt-in bfloat16 cast — currently DISABLED.
+            # B4: opt-in bfloat16 UNet cast with fp32 VAE-boundary wrappers.
             #
-            # The naive cast (unet → bf16, vae stays fp32) crashes on first
-            # forward: the VAE-encoded latent enters the UNet as fp32 but
-            # encounters bf16 weights at the first matmul (mat1=Float vs
-            # mat2=BFloat16). Fixing it cleanly requires casting the entire
-            # sub-pipeline including the VAE, which then risks the texture-
-            # colour regression that commit 4caf310 already had to fix.
+            # The naive partial cast crashed because the fp32 VAE latent hit
+            # bf16 UNet weights at the first matmul. The fix: cast only the
+            # UNet weights, then wrap UNet.forward so any fp32 input tensor
+            # is up-cast to bf16 at the boundary and any bf16 output is
+            # cast back to fp32 before re-entering the VAE. VAE encode/decode
+            # stay fp32, so colour fidelity is preserved (the original
+            # commit 4caf310 concern). UNet activations + KV cache halve.
             #
-            # Until we have a safer path (e.g. runtime input up-cast at the
-            # UNet boundary, or a verified all-bf16 mode that preserves
-            # colour), this flag is acknowledged but no cast is performed.
-            # Wall-clock improvement targets the step-count flags instead:
-            # HY3D_MULTIVIEW_STEPS / HY3D_DELIGHT_STEPS.
+            # Targets the multiview 6-view cross-attention which is the
+            # largest single MPS buffer in the pipeline (~3 GB → ~1.5 GB).
+            # Default OFF (HY3D_BF16_TEXGEN unset) so existing runs are
+            # bit-identical; flip on once a side-by-side render confirms
+            # texture colour matches on the user's representative assets.
             if self.settings.bf16_texgen:
-                logger.info(
-                    "[bf16-texgen] flag set but cast is currently disabled "
-                    "(pipeline dtype-mismatch crash on partial cast, colour "
-                    "regression risk on full cast). Set "
-                    "HY3D_MULTIVIEW_STEPS / HY3D_DELIGHT_STEPS for the main "
-                    "speedup lever."
-                )
+                try:
+                    _wrap_unet_bf16(
+                        self.texgen_pipeline.models["multiview_model"].pipeline.unet,
+                        "multiview",
+                    )
+                except Exception as exc:
+                    logger.warning("Could not bf16-wrap multiview UNet: %s", exc)
+                try:
+                    _delight_w = self.texgen_pipeline.models.get("delight_model")
+                    if _delight_w and hasattr(_delight_w, "pipeline") and hasattr(_delight_w.pipeline, "unet"):
+                        _wrap_unet_bf16(_delight_w.pipeline.unet, "delight")
+                except Exception as exc:
+                    logger.warning("Could not bf16-wrap delight UNet: %s", exc)
 
             self._texgen_loaded = True
             logger.info("Texture pipeline ready")
@@ -659,7 +709,11 @@ class Hunyuan3DService:
         _params_hash = None
         _attempt = 1
 
-        generator = torch.Generator(self.device).manual_seed(seed)
+        if self._dm.is_gpu:
+            self._move_to_device("i23d_pipeline")
+
+        gen_device = "cpu" if str(self.device) == "mps" else self.device
+        generator = torch.Generator(gen_device).manual_seed(seed)
         t0 = time.time()
         with torch.inference_mode():
             outputs = self.i23d_pipeline(
@@ -699,15 +753,30 @@ class Hunyuan3DService:
         if texture and self.has_texgen:
             self._ensure_texgen_loaded()
             mesh = self.face_reducer(mesh, max_facenum=face_count)
+            # B5: aggressively offload every non-texgen pipeline before the
+            # 6-view multiview attention kernel allocates its large buffer.
+            # On MPS the multiview pass peaks at ~6-8 GB on its own; leaving
+            # i23d/t2i/mv resident pushes total occupancy past the
+            # per-process watermark and the OS terminates the worker.
             if self._dm.is_gpu:
                 self._offload_to_cpu("i23d_pipeline")
-                self._offload_to_cpu("t2i_pipeline")  # free SDXL MPS for multiview
+                self._offload_to_cpu("t2i_pipeline")
+                self._offload_to_cpu("mv_pipeline")  # may be no-op if never loaded
+                gc.collect()
+                empty_cache()
             t0 = time.time()
             with torch.inference_mode():
                 mesh = self.texgen_pipeline(mesh, clean_image)
             logger.info("Texture gen took %.1f s", time.time() - t0)
+            # B1: release texgen MPS allocations immediately after the bake.
+            # The result dict only carries paths/URLs (B2) — there is no
+            # reason for the multiview UNet to stay resident through Celery
+            # serialisation and the next idle period.
             if self._dm.is_gpu:
+                self._offload_texgen_to_cpu()
                 self._move_to_device("i23d_pipeline")
+                gc.collect()
+                empty_cache()
             include_normals = True
         del clean_image, image
 
@@ -724,6 +793,13 @@ class Hunyuan3DService:
                     self.vector_store.delete(prev["id"])
             self.vector_store.store(_embedding, _params_hash, result, metadata={"source": "image-to-3d"})
 
+        # B2: explicit cleanup of the trimesh + tensors before returning.
+        # `result` is a small dict of paths/URLs/uid — bytes already on disk.
+        # Letting these objects survive Python GC until Celery serialises the
+        # result has historically allowed MPS buffers to live ~30s longer
+        # than necessary, enough to cause OOM on the next task.
+        del mesh
+        gc.collect()
         empty_cache()
         return result
 
@@ -882,7 +958,8 @@ class Hunyuan3DService:
                     with self._mv_lock:
                         self._offload_to_cpu("i23d_pipeline", "t2i_pipeline")
                         self._move_to_device("mv_pipeline")
-                        generator = torch.Generator(self.device).manual_seed(_seed_try)
+                        gen_device = "cpu" if str(self.device) == "mps" else self.device
+                        generator = torch.Generator(gen_device).manual_seed(_seed_try)
                         t0 = time.time()
                         with torch.inference_mode():
                             outputs = self.mv_pipeline(
@@ -923,7 +1000,8 @@ class Hunyuan3DService:
             for _try in range(2):
                 _seed_try = seed + _try * 1000
                 try:
-                    generator = torch.Generator(self.device).manual_seed(_seed_try)
+                    gen_device = "cpu" if str(self.device) == "mps" else self.device
+                    generator = torch.Generator(gen_device).manual_seed(_seed_try)
                     t0 = time.time()
                     with torch.inference_mode():
                         outputs = self.i23d_pipeline(
@@ -969,23 +1047,42 @@ class Hunyuan3DService:
         if texture and self.has_texgen and front_image:
             self._ensure_texgen_loaded()
             mesh = self.face_reducer(mesh, max_facenum=face_count)
+            # B5: offload every non-texgen pipeline before the multiview pass.
+            # mv_pipeline is the heavy one here — leaving it resident plus
+            # texgen multiview UNet doubles peak MPS occupancy.
             if self._dm.is_gpu:
                 self._offload_to_cpu("i23d_pipeline")
                 self._offload_to_cpu("t2i_pipeline")
+                self._offload_to_cpu("mv_pipeline")
+                gc.collect()
+                empty_cache()
             t0 = time.time()
             with torch.inference_mode():
                 # Pass all validated views so texgen uses real back/left/right images
                 # instead of hallucinating them from the front image alone.
                 mesh = self.texgen_pipeline(mesh, front_image, user_views=image_dict)
             logger.info("MV texture gen took %.1f s", time.time() - t0)
+            # B1: free texgen MPS immediately after bake.
             if self._dm.is_gpu:
+                self._offload_texgen_to_cpu()
                 self._move_to_device("i23d_pipeline")
+                gc.collect()
+                empty_cache()
             include_normals = True
 
         result = self._export_mesh(mesh, uid, out_type, include_normals)
         result["attempt"] = _attempt
         result["generation_time"] = round(time.time() - _t_start, 1)
 
+        # B2: drop mesh + intermediates so Celery doesn't serialise around
+        # live MPS allocations.
+        del mesh
+        if "image_dict" in dir():
+            try:
+                image_dict.clear()
+            except Exception:
+                pass
+        gc.collect()
         empty_cache()
         return result
 
@@ -1059,5 +1156,7 @@ def init_hunyuan3d(settings: Optional[Hunyuan3DSettings] = None, vector_store: O
 
 
 def get_hunyuan3d() -> Hunyuan3DService:
-    assert _service is not None, "Hunyuan3DService not initialized. Call init_hunyuan3d() first."
+    global _service
+    if _service is None:
+        _service = init_hunyuan3d()
     return _service

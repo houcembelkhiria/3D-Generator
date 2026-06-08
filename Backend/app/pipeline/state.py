@@ -21,6 +21,9 @@ class Pipeline3DState(TypedDict):
     mesh_valid: bool
     mesh_retry_count: int
 
+    # Generation options
+    texture_enabled: bool
+
     # Output
     model_info: Optional[dict]
 

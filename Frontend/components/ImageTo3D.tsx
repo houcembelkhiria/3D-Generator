@@ -3,6 +3,9 @@ import { GeneratedModel } from '../types';
 import { ModelViewer3D } from './ModelViewer3D';
 import { IconUpload, IconLoader, IconBox } from './Icons';
 import { API_BASE } from '../api';
+import { useGenerationTracker } from '../hooks/useGenerationTracker';
+import { ExecutionTracker } from './ExecutionTracker';
+import { CELERY_3D_STEPS } from '../lib/pipelines';
 
 interface ImageTo3DProps {
   onModelGenerated?: (model: GeneratedModel) => void;
@@ -37,9 +40,38 @@ export const ImageTo3D: React.FC<ImageTo3DProps> = ({ onModelGenerated }) => {
   const [generationTime, setGenerationTime] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const currentUidRef = useRef<string | null>(null);
+  const [currentUid, setCurrentUid] = useState<string | null>(null);
   const cancelledRef = useRef(false);
 
-  useEffect(() => {
+  const tracker = useGenerationTracker(currentUid);
+
+  // Sync tracker result into local result state
+  React.useEffect(() => {
+    if (tracker.trackerState === 'completed' && tracker.result) {
+      const data = tracker.result;
+      setResult({ previewUrl: `${API_BASE}${data.preview_url}`, downloadUrl: `${API_BASE}${data.download_url}` });
+      setGenerationTime(data.generation_time ?? null);
+      setLoading(false);
+      onModelGenerated?.({
+        id: data.uid ?? crypto.randomUUID(),
+        previewUrl: `${API_BASE}${data.preview_url}`,
+        downloadUrl: `${API_BASE}${data.download_url}`,
+        format: data.format,
+        source: 'image-to-3d',
+        createdAt: new Date().toISOString(),
+        fromCache: data.from_cache ?? false,
+        generationTime: data.generation_time,
+        faceCount: data.face_count,
+        fileSizeMb: data.file_size_mb,
+      });
+    }
+    if (tracker.trackerState === 'failed' && !cancelledRef.current) {
+      setError(tracker.error ?? 'Generation failed');
+      setLoading(false);
+    }
+  }, [tracker.trackerState, tracker.result, tracker.error]);
+
+    useEffect(() => {
     if (!loading) return;
     const t0 = Date.now();
     setElapsed(0);
@@ -124,8 +156,8 @@ export const ImageTo3D: React.FC<ImageTo3DProps> = ({ onModelGenerated }) => {
       }
       const { uid } = await submitRes.json();
       currentUidRef.current = uid;
-
-      // WebSocket with polling fallback
+      setCurrentUid(uid);
+      // Tracker hook handles WS — we still run the promise below for backwards-compat cancel flow
       let data: any = null;
       const wsBase = API_BASE.replace(/^http/, 'ws');
       try {
@@ -174,6 +206,7 @@ export const ImageTo3D: React.FC<ImageTo3DProps> = ({ onModelGenerated }) => {
     } finally {
       setLoading(false);
       currentUidRef.current = null;
+      setCurrentUid(null);
     }
   };
 
@@ -348,6 +381,18 @@ export const ImageTo3D: React.FC<ImageTo3DProps> = ({ onModelGenerated }) => {
                   {`Download ${outputType.toUpperCase()}`}
                 </a>
               </>
+            ) : loading ? (
+              <ExecutionTracker
+                taskId={currentUid}
+                queue={tracker.queue}
+                worker={tracker.worker}
+                steps={CELERY_3D_STEPS}
+                currentStepId={tracker.currentStage}
+                events={tracker.events}
+                elapsedSec={elapsed}
+                state={tracker.trackerState}
+                error={tracker.error}
+              />
             ) : (
               <div className="flex flex-col items-center justify-center min-h-[300px] bg-[var(--bg-tertiary)] rounded-xl border border-theme text-theme-muted">
                 <IconBox className="w-16 h-16 mb-4 opacity-20" />

@@ -112,7 +112,8 @@ class Multiview_Diffusion_Net():
             if control_images[i].mode == 'L':
                 control_images[i] = control_images[i].point(lambda x: 255 if x > 1 else 0, mode='1')
 
-        kwargs = dict(generator=torch.Generator(device=self.pipeline.device).manual_seed(0))
+        gen_device = "cpu" if str(self.pipeline.device) == "mps" else self.pipeline.device
+        kwargs = dict(generator=torch.Generator(device=gen_device).manual_seed(0))
 
         num_view = len(control_images) // 2
         normal_image = [[control_images[i] for i in range(num_view)]]

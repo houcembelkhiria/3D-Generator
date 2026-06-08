@@ -51,7 +51,8 @@ class Img2img_Control_Ip_adapter:
             negative_prompt=negative_prompt,
             image=control_image,
             ip_adapter_image=ip_adapter_image,
-            generator=torch.manual_seed(42),
+            gen_device = "cpu" if str(self.pipe.device) == "mps" else self.pipe.device
+            generator=torch.Generator(device=gen_device).manual_seed(42),
             seed=42,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
