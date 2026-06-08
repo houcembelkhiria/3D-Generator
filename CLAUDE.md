@@ -69,3 +69,7 @@ The `Backend/hy3dgen/` package contains the Hunyuan3D model pipeline (shape gene
 ## Vector Cache (ChromaDB)
 
 The Backend uses a ChromaDB vector store (`Backend/generated/vector_store/`) to cache 3D generation results by CLIP/DINO image embedding similarity. When a new request arrives, the embedding is compared against stored embeddings (cosine similarity >= 0.95). Cache hits return instantly. Different generation parameters produce separate cache entries. API: `/api/v1/cache-stats`, `/api/v1/similar-models`.
+
+## Git / Contribution Rules
+
+- **Never add `Co-Authored-By: Claude …` trailers to commits.** Do not credit Claude, Anthropic, or any AI assistant in commit messages. This keeps the GitHub contributor list clean and reflects only human contributors.
