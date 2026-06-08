@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "3d-generator": {
+      "command": "python",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "Backend",
+      "env": {
+        "BACKEND_URL": "http://localhost:8000"
+      }
+    }
+  }
+}
