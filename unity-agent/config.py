@@ -26,5 +26,9 @@ UNITY_AGENT_TOKEN: str = os.environ.get("UNITY_AGENT_TOKEN", "dev-token")
 UNITY_MCP_HOST: str = os.environ.get("UNITY_MCP_HOST", "localhost")
 UNITY_MCP_PORT: int = int(os.environ.get("UNITY_MCP_PORT", "6400"))
 
+# ── Unity Auto-Launch ────────────────────────────────────────────────────────
+UNITY_EDITOR_APP_PATH: str = os.environ.get("UNITY_EDITOR_APP_PATH", "/Applications/Unity/Hub/Editor/6000.3.7f1/Unity.app")
+UNITY_PROJECT_PATH: str = os.environ.get("UNITY_PROJECT_PATH", "/Users/houcem/My project")
+
 # ── Polling ───────────────────────────────────────────────────────────────────
 POLL_INTERVAL_SEC: float = float(os.environ.get("POLL_INTERVAL_SEC", "1.0"))

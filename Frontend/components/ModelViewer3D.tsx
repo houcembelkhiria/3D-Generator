@@ -24,7 +24,10 @@ export const ModelViewer3D: React.FC<ModelViewer3DProps> = ({ src, alt = '3D Mod
   return (
     <div className={`relative w-full aspect-square bg-[var(--bg-tertiary)] rounded-xl border border-theme overflow-hidden ${className}`}>
       {/* @ts-ignore — model-viewer is a web component loaded via CDN */}
+      {/* key=src forces a full DOM remount on every new model, preventing the
+          previous mesh from leaking into the next generation's viewer */}
       <model-viewer
+        key={src}
         src={src}
         alt={alt}
         auto-rotate

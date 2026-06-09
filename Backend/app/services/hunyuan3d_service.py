@@ -191,6 +191,8 @@ class Hunyuan3DService:
 
 
         self._ready = True
+        if self._dm.is_gpu:
+            self._offload_to_cpu("i23d_pipeline")
         logger.info("Hunyuan3DService ready.")
 
 
@@ -573,6 +575,14 @@ class Hunyuan3DService:
 
     # --- Memory management (MPS) ---
     def _offload_to_cpu(self, *pipelines: str) -> None:
+        """Move pipelines to CPU to free GPU/MPS memory.
+
+        On Apple Silicon, CPU and GPU share the same physical memory, so
+        "offloading to CPU" just moves tensors from MPS-backed to CPU-backed
+        storage. The tensors are *not* freed – they still consume RAM.  For
+        Apple Silicon the real benefit is that MPS internal caches are freed
+        after empty_cache().
+        """
         if not self._dm.is_gpu:
             return
         import time as _t
@@ -587,6 +597,19 @@ class Hunyuan3DService:
                 logger.info("_offload_to_cpu(%s) took %.1f s", name, _t.time() - _ts)
         gc.collect()
         empty_cache()
+
+    def _release_pipeline(self, attr_name: str) -> None:
+        """Fully delete a pipeline from memory and force GC+cache flush.
+
+        Unlike offloading (which keeps the model in CPU RAM), this
+        fully releases the memory. The pipeline will be reloaded on next use.
+        """
+        obj = getattr(self, attr_name, None)
+        if obj is not None:
+            delattr(self, attr_name)
+            del obj
+            gc.collect()
+            empty_cache()
 
     def _move_to_device(self, *pipelines: str) -> None:
         if not self._dm.is_gpu:
@@ -774,7 +797,6 @@ class Hunyuan3DService:
             # serialisation and the next idle period.
             if self._dm.is_gpu:
                 self._offload_texgen_to_cpu()
-                self._move_to_device("i23d_pipeline")
                 gc.collect()
                 empty_cache()
             include_normals = True
@@ -799,8 +821,11 @@ class Hunyuan3DService:
         # result has historically allowed MPS buffers to live ~30s longer
         # than necessary, enough to cause OOM on the next task.
         del mesh
-        gc.collect()
-        empty_cache()
+        if self._dm.is_gpu:
+            self._offload_texgen_to_cpu()
+            self._release_pipeline("texgen_pipeline")
+            gc.collect()
+            empty_cache()
         return result
 
     def text_to_3d(
@@ -976,7 +1001,6 @@ class Hunyuan3DService:
                         _mv_mesh = _meshes[0] if _meshes else None
                         del outputs
                         self._offload_to_cpu("mv_pipeline")
-                        self._move_to_device("i23d_pipeline")
                     if _mv_mesh is not None and len(_mv_mesh.faces) > 500:
                         mesh = _mv_mesh
                         _attempt = _try + 1
@@ -990,13 +1014,14 @@ class Hunyuan3DService:
                     logger.warning("mv_pipeline attempt %d failed: %s", _try + 1, _e)
                     try:
                         self._offload_to_cpu("mv_pipeline")
-                        self._move_to_device("i23d_pipeline")
                     except Exception:
                         pass
 
         # Fallback: i23d with front image only
         if mesh is None:
             logger.info("MV falling back to i23d with front image")
+            if self._dm.is_gpu:
+                self._move_to_device("i23d_pipeline")
             for _try in range(2):
                 _seed_try = seed + _try * 1000
                 try:
@@ -1056,6 +1081,9 @@ class Hunyuan3DService:
                 self._offload_to_cpu("mv_pipeline")
                 gc.collect()
                 empty_cache()
+                # Release t2i and mv pipelines fully — they are expensive to
+                # keep in RAM and they can be reloaded on demand.
+                self._release_pipeline("t2i_pipeline")
             t0 = time.time()
             with torch.inference_mode():
                 # Pass all validated views so texgen uses real back/left/right images
@@ -1065,7 +1093,6 @@ class Hunyuan3DService:
             # B1: free texgen MPS immediately after bake.
             if self._dm.is_gpu:
                 self._offload_texgen_to_cpu()
-                self._move_to_device("i23d_pipeline")
                 gc.collect()
                 empty_cache()
             include_normals = True
@@ -1082,8 +1109,11 @@ class Hunyuan3DService:
                 image_dict.clear()
             except Exception:
                 pass
-        gc.collect()
-        empty_cache()
+            if self._dm.is_gpu:
+                self._offload_texgen_to_cpu()
+                self._release_pipeline("texgen_pipeline")
+                gc.collect()
+                empty_cache()
         return result
 
 

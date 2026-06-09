@@ -248,6 +248,35 @@ def spawn_model(body: _SpawnBody):
         "has_texture": body.has_texture,
     }
     event_id = bus.publish(event)
+    
+    # Launch unity agent as a one-shot process synchronously
+    import subprocess
+    from pathlib import Path
+    from fastapi import HTTPException
+    
+    agent_dir = Path(__file__).resolve().parents[3] / "unity-agent"
+    try:
+        res = subprocess.run(
+            ["python3", "agent.py", "--one-shot"], 
+            cwd=str(agent_dir),
+            capture_output=True,
+            text=True,
+            timeout=60 # wait up to 60s for Unity to launch and spawn
+        )
+        logger.info(f"Agent output: {res.stdout}")
+        if res.stderr:
+            logger.warning(f"Agent stderr: {res.stderr}")
+        if res.returncode != 0:
+            logger.error(f"Agent failed: {res.stderr or res.stdout}")
+            raise HTTPException(500, f"Failed to spawn in Unity: {res.stderr or res.stdout}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "Timed out waiting for Unity to launch and connect.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to trigger unity agent: {e}")
+        raise HTTPException(500, f"Agent launch error: {str(e)}")
+
     return {"spawned": True, "event_id": event_id}
 
 
@@ -263,12 +292,15 @@ def _check_agent_token(authorization: str = "") -> None:
     from fastapi import HTTPException
     expected = os.environ.get("UNITY_AGENT_TOKEN", "dev-token")
     token = authorization.removeprefix("Bearer ").strip()
+    print(f"DEBUG TOKEN: Expected '{expected}', Received Header: '{authorization}', Parsed: '{token}'")
     if token != expected:
         raise HTTPException(401, "Invalid or missing UNITY_AGENT_TOKEN.")
 
 
+from fastapi import APIRouter, HTTPException, Header
+
 @router.get("/pending-events")
-def pending_events(authorization: str = ""):
+def pending_events(authorization: str = Header("")):
     """Return unacknowledged spawn events for the Relay Agent.
 
     The Relay Agent polls this endpoint, picks up events, calls the Unity
@@ -283,7 +315,7 @@ def pending_events(authorization: str = ""):
 
 
 @router.post("/ack")
-def ack_event(body: _AckBody, authorization: str = ""):
+def ack_event(body: _AckBody, authorization: str = Header("")):
     """Acknowledge a processed spawn event.
 
     Header: Authorization: Bearer <UNITY_AGENT_TOKEN>

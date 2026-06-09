@@ -1,97 +1,72 @@
-"""MCP WebSocket client for communicating with the CoplayDev/unity-mcp server.
+"""MCP client using the FastMCP SDK for StreamableHTTP support.
 
-Connects to ws://localhost:6400 (Unity Editor with MCP for Unity package).
-Sends JSON-RPC 2.0 tool calls and waits for the response.
-Handles reconnection automatically on lost connection.
+Connects to http://localhost:6400/mcp (Unity Editor with MCP for Unity package).
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 from typing import Any
 
-import websockets
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from fastmcp.client import Client
 
 from config import UNITY_MCP_HOST, UNITY_MCP_PORT
 
 logger = logging.getLogger(__name__)
 
-_WS_URI = f"ws://{UNITY_MCP_HOST}:{UNITY_MCP_PORT}"
+# FastMCP uses StreamableHTTP or SSE on this URL
+_MCP_URI = f"http://{UNITY_MCP_HOST}:{UNITY_MCP_PORT}/mcp"
 
+
+from contextlib import AsyncExitStack
 
 class MCPClient:
-    """Persistent WebSocket MCP client with auto-reconnect."""
+    """Persistent FastMCP client."""
 
     def __init__(self) -> None:
-        self._ws = None
-        self._id  = 0
+        self.client: Client | None = None
+        self._exit_stack = AsyncExitStack()
 
     async def connect(self) -> None:
-        """Open WebSocket connection to Unity MCP server."""
-        self._ws = await websockets.connect(_WS_URI, ping_interval=20, ping_timeout=10)
-        logger.info("Connected to Unity MCP server at %s", _WS_URI)
-        # Send MCP initialize handshake
-        await self._send({
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities":    {},
-                "clientInfo":      {"name": "3d-generator-relay", "version": "1.0.0"},
-            },
-        })
-        resp = await self._recv()
-        logger.debug("MCP initialize response: %s", resp)
+        """Initialize connection to Unity FastMCP server."""
+        try:
+            logger.info("Connecting to Unity FastMCP server at %s", _MCP_URI)
+            self._exit_stack = AsyncExitStack()
+            c = Client(_MCP_URI, auto_initialize=True)
+            self.client = await self._exit_stack.enter_async_context(c)
+            logger.info("FastMCP connected and initialized.")
+        except Exception as e:
+            await self.disconnect()
+            raise RuntimeError(f"Connection failed: {e}")
 
     async def disconnect(self) -> None:
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
+        """Close connection."""
+        await self._exit_stack.aclose()
+        self.client = None
 
     @property
     def is_connected(self) -> bool:
-        return self._ws is not None and not self._ws.closed
+        return self.client is not None
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Send a tools/call request and return the result."""
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Call a tool via the MCP session."""
         if not self.is_connected:
             raise RuntimeError("MCP client not connected")
-        call_id = self._next_id()
-        await self._send({
-            "jsonrpc": "2.0",
-            "id":      call_id,
-            "method":  "tools/call",
-            "params":  {"name": name, "arguments": arguments},
-        })
-        resp = await self._recv()
-        if "error" in resp:
-            raise RuntimeError(f"MCP tool error: {resp['error']}")
-        return resp.get("result", {})
+        
+        # In fastmcp.client.Client, call_tool returns the raw response string or object
+        return await self.client.call_tool(name, arguments)
 
     async def list_tools(self) -> list[dict]:
         """Return the list of tools exposed by Unity MCP."""
         if not self.is_connected:
             raise RuntimeError("MCP client not connected")
-        await self._send({
-            "jsonrpc": "2.0",
-            "id":      self._next_id(),
-            "method":  "tools/list",
-            "params":  {},
-        })
-        resp = await self._recv()
-        return resp.get("result", {}).get("tools", [])
-
-    # ── Internal ──────────────────────────────────────────────────────────────
-    async def _send(self, payload: dict) -> None:
-        await self._ws.send(json.dumps(payload))
-
-    async def _recv(self) -> dict:
-        raw = await asyncio.wait_for(self._ws.recv(), timeout=30.0)
-        return json.loads(raw)
-
-    def _next_id(self) -> int:
-        self._id += 1
-        return self._id
+        
+        tools = await self.client.list_tools()
+        # FastMCP client list_tools returns a list of Tool objects or dicts
+        # We handle both in case of API differences
+        result = []
+        for t in tools:
+            if hasattr(t, "name"):
+                result.append({"name": t.name, "description": getattr(t, "description", "")})
+            else:
+                result.append(t)
+        return result

@@ -260,7 +260,7 @@ export const ModelGallery: React.FC<ModelGalleryProps> = ({ models, onRemove, on
 
         {installError && (
           <div className="mb-4 flex items-center justify-between gap-3 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 text-xs">
-            <span>Install failed: {installError}</span>
+            <span>Error: {installError}</span>
             <button
               type="button"
               onClick={() => setInstallError(null)}

@@ -71,19 +71,16 @@ celery_app.conf.update(
 # B3: per-task cleanup signal (the only piece worth keeping from the
 # earlier revision — see the comment block at the top of this file).
 @task_postrun.connect
-def _hy3d_task_mps_cleanup(**_):
-    """Release MPS allocations + run Python GC after every task.
-
-    Without this, MPS buffers from a finished task survive until the next
-    Python GC sweep — easily 30+ seconds. On a single-prefork worker that
-    interval is enough for the next task's model load to OOM. Explicit
-    cleanup makes each task's footprint deterministic.
-    """
+def _hy3d_task_cleanup(**_):
+    """Aggressive per-task cleanup: 3 rounds of GC + MPS/CUDA cache flush."""
     import gc
-    gc.collect()
+    for _ in range(3):
+        gc.collect()
     try:
         import torch
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        if hasattr(torch, "mps") and torch.backends.mps.is_available():
             torch.mps.empty_cache()
     except Exception:
         pass

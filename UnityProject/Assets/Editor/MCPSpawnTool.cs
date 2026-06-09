@@ -1,75 +1,66 @@
 using System;
-using System.Collections;
 using System.IO;
+using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Networking;
+using MCP.Editor; // CoplayDev/unity-mcp namespace
 
 namespace ThreeDGenerator.Editor
 {
     /// <summary>
-    /// Custom MCP Tool exposed to the unity-mcp server.
-    /// Registered automatically via [MCPTool] when the CoplayDev/unity-mcp package
-    /// is installed. The Relay Agent calls:
+    /// Custom MCP Tool registered with the CoplayDev/unity-mcp package.
+    /// Discovered automatically via [McpForUnityTool] attribute (reflection on Editor assemblies).
+    ///
+    /// The Relay Agent calls:
     ///   tools/call { name: "spawn_glb_from_url", arguments: { url, name, scene } }
-    /// Unity downloads the GLB, imports it via glTFast, and spawns it in the scene.
+    ///
+    /// Unity downloads the GLB from the URL, imports it via glTFast, and spawns it in the scene.
     /// </summary>
+    [McpForUnityTool("spawn_glb_from_url", Group = "3d-generator")]
     public static class MCPSpawnTool
     {
-        // ── State ─────────────────────────────────────────────────────────────
-        static readonly string ImportDir     = Path.Combine(Application.dataPath, "Imported");
-        const           string ImportDirAsset = "Assets/Imported";
-
-        // ── MCP Tool entry-point ──────────────────────────────────────────────
+        // ── MCP entry-point ────────────────────────────────────────────────────
         /// <summary>
-        /// MCP tool: download a GLB/GLTF from <paramref name="url"/>,
-        /// import it into the project, and spawn it in the scene.
+        /// Required handler method discovered by the MCP package via reflection.
+        /// Parameters: url (string), name (string, optional), scene (string: "new"|"existing")
         /// </summary>
-        /// <param name="url">Public HTTP(S) URL of the .glb file.</param>
-        /// <param name="name">Display name for the spawned GameObject.</param>
-        /// <param name="scene">"new" to open a blank scene first, "existing" to keep current.</param>
-        /// <returns>Result message logged back to the MCP caller.</returns>
-        // NOTE: The [MCPTool] attribute is injected by the com.coplay.mcp-for-unity package.
-        // If the package uses a different attribute name, rename accordingly after install.
-        [UnityEngine.RuntimeInitializeOnLoadMethod]   // keeps compiler happy until package resolves
-        public static void _RegisterTool() { /* no-op — package reflection picks up SpawnGLBFromUrl */ }
-
-        /// <summary>Actual implementation — called by the MCP dispatcher via reflection.</summary>
-        public static string SpawnGLBFromUrl(string url, string name = "", string scene = "existing")
+        public static string HandleCommand(JObject parameters)
         {
-            try
-            {
-                Directory.CreateDirectory(ImportDir);
+            string url   = parameters["url"]?.Value<string>()   ?? "";
+            string name  = parameters["name"]?.Value<string>()  ?? "";
+            string scene = parameters["scene"]?.Value<string>() ?? "existing";
 
-                // Derive a safe asset ID from url
-                string ext  = "glb";
-                try { ext = Path.GetExtension(new Uri(url).LocalPath).TrimStart('.').ToLower(); } catch { }
-                if (string.IsNullOrEmpty(ext)) ext = "glb";
+            if (string.IsNullOrEmpty(url))
+                return "[MCPSpawnTool] ERROR: 'url' parameter is required.";
 
-                string id        = Sanitize(string.IsNullOrEmpty(name) ? Guid.NewGuid().ToString() : name);
-                string filePath  = Path.Combine(ImportDir, $"{id}.{ext}");
-                string assetPath = $"{ImportDirAsset}/{id}.{ext}";
+            // Queue the actual work on the main thread
+            EditorApplication.delayCall += () => _DownloadAndSpawn(url, name, scene);
 
-                // Kick off coroutine-equivalent via EditorApplication.delayCall chain
-                EditorApplication.delayCall += () => _DownloadAndSpawn(url, filePath, assetPath, name, scene);
-
-                return $"[MCPSpawnTool] Spawn queued: downloading {url}";
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[MCPSpawnTool] SpawnGLBFromUrl failed: {ex}");
-                return $"[MCPSpawnTool] ERROR: {ex.Message}";
-            }
+            return $"[MCPSpawnTool] Spawn queued: {url}";
         }
 
-        // ── Internal helpers ──────────────────────────────────────────────────
-        static void _DownloadAndSpawn(string url, string filePath, string assetPath,
-                                      string displayName, string scene)
+        // ── Internal logic ────────────────────────────────────────────────────
+        static readonly string ImportDir      = Path.Combine(Application.dataPath, "Imported");
+        const           string ImportDirAsset = "Assets/Imported";
+
+        static void _DownloadAndSpawn(string url, string displayName, string scene)
         {
-            Debug.Log($"[MCPSpawnTool] Downloading {url}");
+            Directory.CreateDirectory(ImportDir);
+
+            string ext = "glb";
+            try { ext = Path.GetExtension(new Uri(url).LocalPath).TrimStart('.').ToLower(); } catch { }
+            if (string.IsNullOrEmpty(ext)) ext = "glb";
+
+            string id        = Sanitize(string.IsNullOrEmpty(displayName) ? Guid.NewGuid().ToString() : displayName);
+            string filePath  = Path.Combine(ImportDir, $"{id}.{ext}");
+            string assetPath = $"{ImportDirAsset}/{id}.{ext}";
+
+            Debug.Log($"[MCPSpawnTool] Downloading: {url}");
             var www = UnityWebRequest.Get(url);
             var op  = www.SendWebRequest();
+
             op.completed += _ =>
             {
                 try
@@ -88,11 +79,10 @@ namespace ThreeDGenerator.Editor
                     if (prefab == null)
                     {
                         Debug.LogError($"[MCPSpawnTool] glTFast produced no prefab for {assetPath}. " +
-                                       "Ensure com.unity.cloud.gltfast is installed.");
+                                       "Is com.unity.cloud.gltfast installed?");
                         return;
                     }
 
-                    // Optionally open a new scene
                     if (scene == "new")
                     {
                         var active = EditorSceneManager.GetActiveScene();
@@ -115,7 +105,6 @@ namespace ThreeDGenerator.Editor
                     if (sv != null) sv.FrameSelected();
                     EditorWindow.FocusWindowIfItsOpen<SceneView>();
 
-                    // Ensure a light exists for textured models
                     _EnsureLight();
 
                     Debug.Log($"[MCPSpawnTool] ✅ Spawn MCP: '{go.name}' (scene={scene})");
