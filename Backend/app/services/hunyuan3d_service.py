@@ -15,12 +15,31 @@ import time
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Callable, Type
 
 import torch
 import torch.quantization
 import numpy as np
 from PIL import Image
+
+# --- Pipeline Loading Utilities ---
+
+def _load_pipeline(pipeline_class: Type[Any], **kwargs) -> Any:
+    """Load a pipeline dynamically.
+    
+    Args:
+        pipeline_class: Class defining the pipeline (e.g., Hunyuan3DDiTFlowMatchingPipeline)
+        **kwargs: Arguments for pipeline initialization
+        
+    Returns:
+        Loaded pipeline instance
+    """
+    try:
+        pipeline = pipeline_class.from_pretrained(**kwargs)
+        return pipeline
+    except Exception as exc:
+        logger.error(f"Failed to load pipeline: {exc}")
+        raise
 
 
 from app.services.vector_store import VectorStore
@@ -86,34 +105,95 @@ def _wrap_unet_bf16(unet, name: str) -> None:
     logger.info("bf16-wrapped %s UNet (VAE stays fp32 — no colour regression)", name)
 
 
-class Hunyuan3DService:
-    """Manages all Hunyuan3D model pipelines and provides generation methods."""
+class PipelineManager:
+    """Manages dynamic pipeline loading/unloading.
+    
+    Uses a decorator to simplify pipeline switching.
+    """
+    def __init__(self, settings: Hunyuan3DSettings, vector_store: Optional[VectorStore] = None):
+        self.settings = settings
+        self.device = settings.device
+        self._dm = get_device_manager(settings.device)
+        self.vector_store = vector_store
+        self._ready = False
+        
+    def _load_pipeline(self, pipeline_class: Type[Any], **kwargs) -> Any:
+        """Load a pipeline dynamically.
+        
+        Args:
+            pipeline_class: Pipeline class (e.g., Hunyuan3DDiTFlowMatchingPipeline)
+            **kwargs: Pipeline initialization arguments
+            
+        Returns:
+            Loaded pipeline
+        """
+        try:
+            pipeline = pipeline_class.from_pretrained(**kwargs)
+            return pipeline
+        except Exception as exc:
+            logger.error(f"Failed to load pipeline: {exc}")
+            raise
 
+    def _setup_pipeline(self, pipeline: Any, name: str) -> None:
+        """Configure pipeline settings (e.g., VAE slicing, quantization).
+        
+        Args:
+            pipeline: Pipeline instance
+            name: Pipeline identifier (e.g., "i23d_pipeline")
+        """
+        if hasattr(pipeline, 'vae') and hasattr(pipeline.vae, 'use_slicing'):
+            pipeline.vae.use_slicing = True
+            logger.info(f"Enabled VAE slicing for {name}")
+        
+        if self.settings.enable_flashvdm:
+            mc_algo = self._dm.mc_algo if self.settings.mc_algo == "mc" else self.settings.mc_algo
+            pipeline.enable_flashvdm(mc_algo=mc_algo)
+            logger.info(f"Enabled FlashVDM for {name}")
+
+    def _quantize_pipeline(self, pipeline: Any, name: str) -> None:
+        """Quantize pipeline if CPU and enabled.
+        
+        Args:
+            pipeline: Pipeline instance
+            name: Pipeline identifier
+        """
+        if self.settings.enable_quantization and self.device == "cpu":
+            try:
+                pipeline.model = self._quantize_model(pipeline.model, name, target_device="cpu")
+                logger.info(f"Quantized {name} model (CPU)")
+            except Exception as exc:
+                logger.warning(f"Failed to quantize {name}: {exc}")
+
+    def _compile_pipeline(self, pipeline: Any, name: str) -> None:
+        """Apply torch.compile for faster inference.
+        
+        Args:
+            pipeline: Pipeline instance
+            name: Pipeline identifier
+        """
+        if self.settings.device == "cuda":
+            try:
+                for component in [pipeline.model, pipeline.vae, pipeline.conditioner]:
+                    if hasattr(component, "__class__") and hasattr(component, "__class__.__name__"):
+                        torch.compile(component, mode="reduce-overhead")
+                        logger.info(f"Applied torch.compile to {name} components")
+            except Exception as exc:
+                logger.warning(f"Failed to compile {name}: {exc}")
+
+
+class Hunyuan3DService:
+    """Manages all Hunyuan3D model pipelines and provides generation methods.
+    
+    Uses PipelineManager for dynamic pipeline loading.
+    """
+    
     def __init__(self, settings: Hunyuan3DSettings, vector_store: Optional[VectorStore] = None) -> None:
         self.settings = settings
         self.device = settings.device
         self._dm = get_device_manager(settings.device)
-        self._dm.setup_globals()
+        self.vector_store = vector_store
         self._ready = False
-
-        i23d_dtype = self._dm.dtype
-
-        # --- Primary shape generation ---
-        logger.info("Loading shape-gen pipeline: %s / %s", settings.model_path, settings.subfolder)
-        self.i23d_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            settings.model_path,
-            subfolder=settings.subfolder,
-            use_safetensors=True,
-            device=settings.device,
-            dtype=i23d_dtype,
-        )
-        if settings.enable_flashvdm:
-            mc_algo = self._dm.mc_algo if settings.mc_algo == "mc" else settings.mc_algo
-            self.i23d_pipeline.enable_flashvdm(mc_algo=mc_algo)
-        # VAE slicing: process in smaller chunks → lower peak memory, faster on MPS
-        if hasattr(self.i23d_pipeline, 'vae') and hasattr(self.i23d_pipeline.vae, 'use_slicing'):
-            self.i23d_pipeline.vae.use_slicing = True
-            logger.info("Enabled VAE slicing for shape-gen")
+        self.pipeline_manager = PipelineManager(settings, vector_store)
 
         # --- Multi-view pipeline (deferred — loaded on first use) ---
         self.mv_pipeline: Optional[Any] = None
@@ -136,6 +216,19 @@ class Hunyuan3DService:
 
         # --- Quantization engine (required on macOS/ARM) ---
         torch.backends.quantized.engine = self._dm.quantization_engine
+
+        # --- Primary shape generation pipeline (i23d) ---
+        logger.info("Loading i23d pipeline from %s (subfolder=%s)...", settings.model_path, settings.subfolder)
+        self.i23d_pipeline = self.pipeline_manager._load_pipeline(
+            Hunyuan3DDiTFlowMatchingPipeline,
+            model_path=settings.model_path,
+            subfolder=settings.subfolder,
+            use_safetensors=True,
+            device="cpu",
+            dtype=self._dm.dtype,
+        )
+        self.pipeline_manager._setup_pipeline(self.i23d_pipeline, "i23d_pipeline")
+        logger.info("i23d pipeline loaded.")
 
         # --- Memory optimization (CUDA only) ---
         try:
@@ -202,45 +295,17 @@ class Hunyuan3DService:
         if self._mv_loaded or not self.settings.enable_mv:
             return
         logger.info("Lazy-loading multi-view pipeline...")
-        self.mv_pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
-            self.settings.mv_model_path,
+        self.mv_pipeline = self.pipeline_manager._load_pipeline(
+            Hunyuan3DDiTFlowMatchingPipeline,
+            model_path=self.settings.mv_model_path,
             subfolder=self.settings.mv_subfolder,
             use_safetensors=True,
             device="cpu",
             dtype=self._dm.dtype,
         )
-        if self.settings.enable_flashvdm:
-            mc_algo = self._dm.mc_algo
-            self.mv_pipeline.enable_flashvdm(mc_algo=mc_algo)
-        # VAE slicing — same as i23d_pipeline
-        if hasattr(self.mv_pipeline, 'vae') and hasattr(self.mv_pipeline.vae, 'use_slicing'):
-            self.mv_pipeline.vae.use_slicing = True
-            logger.info("Enabled VAE slicing for mv pipeline")
-        # torch.compile on GPU
-        if self.settings.device == "cuda":
-            try:
-                self.mv_pipeline.model = torch.compile(self.mv_pipeline.model, mode="reduce-overhead")
-                logger.info("Applied torch.compile to mv DiT model (%s)", self.settings.device)
-            except Exception as exc:
-                logger.warning("torch.compile failed for mv DiT: %s", exc)
-            try:
-                self.mv_pipeline.vae = torch.compile(self.mv_pipeline.vae, mode="reduce-overhead")
-                logger.info("Applied torch.compile to mv VAE")
-            except Exception as exc:
-                logger.warning("torch.compile failed for mv VAE: %s", exc)
-            try:
-                self.mv_pipeline.conditioner = torch.compile(self.mv_pipeline.conditioner, mode="reduce-overhead")
-                logger.info("Applied torch.compile to mv conditioner")
-            except Exception as exc:
-                logger.warning("torch.compile failed for mv conditioner: %s", exc)
-        # int8 quantization on CPU — same as i23d_pipeline
-        if self.settings.enable_quantization and self.device == "cpu":
-            try:
-                self.mv_pipeline.model = self._quantize_model(
-                    self.mv_pipeline.model, "mv-DiT", target_device="cpu"
-                )
-            except Exception as exc:
-                logger.warning("Could not quantize mv-DiT: %s", exc)
+        self.pipeline_manager._setup_pipeline(self.mv_pipeline, "mv_pipeline")
+        self.pipeline_manager._quantize_pipeline(self.mv_pipeline, "mv_pipeline")
+        self.pipeline_manager._compile_pipeline(self.mv_pipeline, "mv_pipeline")
         self._mv_loaded = True
         logger.info("Multi-view pipeline ready")
 
@@ -251,10 +316,12 @@ class Hunyuan3DService:
         try:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
             logger.info("Lazy-loading texture pipeline...")
-            self.texgen_pipeline = Hunyuan3DPaintPipeline.from_pretrained(
-                self.settings.tex_model_path, device=self.device
+            self.texgen_pipeline = self.pipeline_manager._load_pipeline(
+                Hunyuan3DPaintPipeline,
+                model_path=self.settings.tex_model_path,
+                device=self.device
             )
-            self.texgen_pipeline.models["multiview_model"].pipeline.vae.use_slicing = True
+            self.pipeline_manager._setup_pipeline(self.texgen_pipeline, "texgen_pipeline")
             # Attention slicing + VAE slicing for both sub-pipelines (CPU efficiency)
             try:
                 pass  # attention_slicing removed — breaks MPS with 52GB OOM
@@ -357,11 +424,12 @@ class Hunyuan3DService:
             # Use the GPU device when not quantizing (qint8 can only run on CPU)
             t2i_device = "cpu" if self.settings.enable_quantization else self.device
             t2i_dtype = torch.float32 if t2i_device == "cpu" else self._dm.dtype
+            
             if target_model == "hunyuan":
                 # Fallback: HunyuanDiT v1.2-Distilled (bilingual, slower)
                 from hy3dgen.text2image import HunyuanDiTPipeline
                 self.t2i_pipeline = HunyuanDiTPipeline(
-                    "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled",
+                    model_path=self.settings.t2i_hunyuan_dit_model,
                     device=t2i_device,
                     dtype=t2i_dtype,
                 )
@@ -369,6 +437,10 @@ class Hunyuan3DService:
                 # Default: Hyper-SDXL 4-step (English, faster, higher quality)
                 from hy3dgen.text2image import SDXLHyperPipeline
                 self.t2i_pipeline = SDXLHyperPipeline(
+                    model_path=self.settings.t2i_sdxl_model,
+                    vae_path=self.settings.t2i_sdxl_vae,
+                    lora_repo=self.settings.t2i_sdxl_lora_repo,
+                    lora_weight=self.settings.t2i_sdxl_lora_weight,
                     device=t2i_device,
                     dtype=t2i_dtype,
                 )

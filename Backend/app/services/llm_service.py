@@ -9,6 +9,8 @@ import logging
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
+from app.core.hunyuan3d_config import Hunyuan3DSettings
+
 try:
     from llama_cpp import Llama
     LLM_AVAILABLE = True
@@ -109,12 +111,9 @@ class LLMService:
         Args:
             model_path: Path to the GGUF model file (optional, can be set later)
         """
-        self.model_path = model_path
+        _settings = Hunyuan3DSettings()
+        self.model_path = model_path or _settings.llm_model_path
         self.session: Optional[LLMSession] = None
-        
-        # Default model path (can be overridden)
-        if self.model_path is None:
-            self.model_path = os.getenv("LLAMA_MODEL_PATH", "./models/llama-3-8b-instruct.Q4_K_M.gguf")
     
     def initialize_session(self, **kwargs) -> LLMSession:
         """
@@ -228,10 +227,10 @@ class OllamaLLMService:
     callers that still pass a Llama-3-templated string.
     """
 
-    # Default to a small instruction-tuned model trained for structured output.
+    # Default model is read from centralised config (Hunyuan3DSettings.ollama_default_model).
     # With Ollama's grammar-constrained decoding (`format=<schema>`), a 3-4B
     # SLM matches a 7-8B general LLM for spec extraction at ~half the RAM.
-    DEFAULT_MODEL = "qwen2.5:3b-instruct"
+    DEFAULT_MODEL = Hunyuan3DSettings().ollama_default_model
 
     def __init__(self, model: str = DEFAULT_MODEL, base_url: str = "http://localhost:11434"):
         self.model = model
@@ -409,13 +408,15 @@ def get_llm_service() -> "LLMService | OllamaLLMService":
     """
     global llm_service
 
+    _settings = Hunyuan3DSettings()
+    # Only use Ollama when OLLAMA_MODEL is explicitly set in the environment.
     ollama_model = os.getenv("OLLAMA_MODEL")
     if ollama_model:
         if not isinstance(llm_service, OllamaLLMService) or llm_service.model != ollama_model:
             llm_service = OllamaLLMService(model=ollama_model)
         return llm_service
 
-    model_path = os.getenv("LLAMA_MODEL_PATH", "./models/llama-3-8b-instruct.Q4_K_M.gguf")
+    model_path = _settings.llm_model_path
     if os.path.exists(model_path):
         return llm_service  # existing LLMService with GGUF
 
@@ -445,8 +446,8 @@ def get_llm_service() -> "LLMService | OllamaLLMService":
 
 # Example usage and testing
 if __name__ == "__main__":
-    # Example configuration
-    model_path = os.getenv("LLAMA_MODEL_PATH", "./models/llama-3-8b-instruct.Q4_K_M.gguf")
+    # Example configuration — reads from Hunyuan3DSettings (LLAMA_MODEL_PATH env var)
+    model_path = Hunyuan3DSettings().llm_model_path
     
     if not os.path.exists(model_path):
         print(f"Model not found at: {model_path}")

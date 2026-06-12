@@ -24,6 +24,21 @@ from diffusers import AutoPipelineForText2Image
 logger = logging.getLogger(__name__)
 
 
+def _get_t2i_settings():
+    """Lazy-load Hunyuan3DSettings to avoid circular imports.
+
+    Returns a settings instance so pipeline constructors can resolve default
+    model identifiers from the centralised config rather than hardcoding them.
+    Falls back to a bare default-constructed settings object if the app
+    package is not importable (e.g. running hy3dgen standalone).
+    """
+    try:
+        from app.core.hunyuan3d_config import Hunyuan3DSettings
+        return Hunyuan3DSettings()
+    except ImportError:
+        return None
+
+
 def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -78,10 +93,17 @@ class HunyuanDiTPipeline:
     def __init__(
         self,
         # v1.2 distilled: ~2x faster than v1.1 with no quality drop (Tencent progressive distillation).
-        model_path="Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled",
+        model_path=None,  # default resolved from Hunyuan3DSettings.t2i_hunyuan_dit_model
         device='cpu',
         dtype=torch.float16
     ):
+        if model_path is None:
+            _s = _get_t2i_settings()
+            model_path = (
+                _s.t2i_hunyuan_dit_model
+                if _s is not None
+                else "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled"
+            )
         self.device = device
         with _temp_default_device('cpu'):
             self.pipe = AutoPipelineForText2Image.from_pretrained(
@@ -191,10 +213,10 @@ class SDXLHyperPipeline:
 
     def __init__(
         self,
-        model_path="stabilityai/stable-diffusion-xl-base-1.0",
-        vae_path="madebyollin/sdxl-vae-fp16-fix",  # fp16-safe VAE (stock SDXL VAE NaNs in fp16)
-        lora_repo="ByteDance/Hyper-SD",
-        lora_weight="Hyper-SDXL-4steps-lora.safetensors",
+        model_path=None,     # default resolved from settings.t2i_sdxl_model
+        vae_path=None,       # default resolved from settings.t2i_sdxl_vae
+        lora_repo=None,      # default resolved from settings.t2i_sdxl_lora_repo
+        lora_weight=None,    # default resolved from settings.t2i_sdxl_lora_weight
         device='cpu',
         dtype=torch.float16,
     ):
@@ -206,6 +228,29 @@ class SDXLHyperPipeline:
             fused_cache_path,
             has_fused_cache,
         )
+
+        # Resolve None defaults from centralised config
+        _s = _get_t2i_settings()
+        if model_path is None:
+            model_path = (
+                _s.t2i_sdxl_model if _s is not None
+                else "stabilityai/stable-diffusion-xl-base-1.0"
+            )
+        if vae_path is None:
+            vae_path = (
+                _s.t2i_sdxl_vae if _s is not None
+                else "madebyollin/sdxl-vae-fp16-fix"
+            )
+        if lora_repo is None:
+            lora_repo = (
+                _s.t2i_sdxl_lora_repo if _s is not None
+                else "ByteDance/Hyper-SD"
+            )
+        if lora_weight is None:
+            lora_weight = (
+                _s.t2i_sdxl_lora_weight if _s is not None
+                else "Hyper-SDXL-4steps-lora.safetensors"
+            )
 
         self.device = device
 

@@ -62,12 +62,12 @@ class Hunyuan3DSettings:
 
     # Multi-view model
     enable_mv: bool = field(default_factory=lambda: os.environ.get("HY3D_ENABLE_MV", "true").lower() == "true")
-    mv_model_path: str = "tencent/Hunyuan3D-2mv"
+    mv_model_path: str = field(default_factory=lambda: os.environ.get("HY3D_MV_MODEL_PATH", "tencent/Hunyuan3D-2mv"))
     mv_subfolder: str = field(default_factory=lambda: os.environ.get("HY3D_MV_SUBFOLDER", "hunyuan3d-dit-v2-mv-turbo"))
 
     # Texture model
     enable_tex: bool = field(default_factory=lambda: os.environ.get("HY3D_ENABLE_TEX", "true").lower() == "true")
-    tex_model_path: str = "tencent/Hunyuan3D-2"
+    tex_model_path: str = field(default_factory=lambda: os.environ.get("HY3D_TEX_MODEL_PATH", "tencent/Hunyuan3D-2"))
 
     # Text-to-image bridge
     enable_t23d: bool = field(default_factory=lambda: os.environ.get("HY3D_ENABLE_T23D", "true").lower() == "true")
@@ -82,6 +82,52 @@ class Hunyuan3DSettings:
     # When unset, the service picks a model-aware default at call time.
     # Override via HY3D_T2I_STEPS to force a specific count regardless of model.
     t2i_steps: Optional[int] = field(default_factory=lambda: _env_int_optional("HY3D_T2I_STEPS"))
+
+    # --- T2I model identifiers (change these to swap models without editing code) ---
+    t2i_hunyuan_dit_model: str = field(
+        default_factory=lambda: os.environ.get(
+            "HY3D_T2I_HUNYUAN_MODEL",
+            "Tencent-Hunyuan/HunyuanDiT-v1.2-Diffusers-Distilled",
+        )
+    )
+    t2i_sdxl_model: str = field(
+        default_factory=lambda: os.environ.get(
+            "HY3D_T2I_SDXL_MODEL",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+        )
+    )
+    t2i_sdxl_vae: str = field(
+        default_factory=lambda: os.environ.get(
+            "HY3D_T2I_SDXL_VAE",
+            "madebyollin/sdxl-vae-fp16-fix",
+        )
+    )
+    t2i_sdxl_lora_repo: str = field(
+        default_factory=lambda: os.environ.get(
+            "HY3D_T2I_SDXL_LORA_REPO",
+            "ByteDance/Hyper-SD",
+        )
+    )
+    t2i_sdxl_lora_weight: str = field(
+        default_factory=lambda: os.environ.get(
+            "HY3D_T2I_SDXL_LORA_WEIGHT",
+            "Hyper-SDXL-4steps-lora.safetensors",
+        )
+    )
+
+    # --- LLM model identifiers ---
+    llm_model_path: str = field(
+        default_factory=lambda: os.environ.get(
+            "LLAMA_MODEL_PATH",
+            "./models/llama-3-8b-instruct.Q4_K_M.gguf",
+        )
+    )
+    ollama_default_model: str = field(
+        default_factory=lambda: os.environ.get(
+            "OLLAMA_MODEL",
+            "qwen2.5:3b-instruct",
+        )
+    )
 
     # Performance
     enable_quantization: bool = field(default_factory=lambda: _env_flag("HY3D_QUANTIZE", False))

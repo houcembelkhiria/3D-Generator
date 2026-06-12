@@ -24,24 +24,42 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class TripoSRService:
-    """Service for TripoSR text-to-mesh generation"""
+class MeshGenerator:
+    """Base class for mesh generation logic.
     
-    def __init__(self, model_path: Optional[str] = None):
+    Abstracts shape generation and normalization.
+    """
+    def __init__(self, resolution: int = 256):
+        self.resolution = resolution
+        
+    def generate(self, prompt: str) -> Dict[str, Any]:
+        """Generate mesh data from text prompt.
+        
+        Args:
+            prompt: Text description of the object
+            
+        Returns:
+            Dictionary with mesh vertices, faces, and metadata
+        """
+        raise NotImplementedError
+
+
+class TripoSRService:
+    """Service for TripoSR text-to-mesh generation.
+    
+    Uses a base mesh generator for unified shape logic.
+    """
+    
+    def __init__(self, mesh_generator: MeshGenerator = None):
         """
         Initialize TripoSR service.
         
         Args:
-            model_path: Path to TripoSR model weights (optional)
+            mesh_generator: Custom mesh generator (default: CubeGenerator).
         """
-        self.model_path = model_path or os.getenv("TRIPOSR_MODEL_PATH", "./models/tripo_sr")
-        self.model = None
-        self.is_initialized = False
-        
-        # Configuration
+        self.mesh_generator = mesh_generator or self._CubeGenerator()
         self.default_config = {
             "resolution": 256,
-            "batch_size": 1,
             "guidance_scale": 7.5,
             "num_inference_steps": 50
         }
@@ -110,66 +128,55 @@ class TripoSRService:
             logger.error(f"Mesh generation failed: {str(e)}")
             raise
     
-    def _mock_tripo_generation(self, text_prompt: str, config: Dict) -> Dict[str, Any]:
+    def generate_mesh(self, text_prompt: str, **kwargs) -> Dict[str, Any]:
         """
-        Mock TripoSR generation for development purposes.
+        Generate mesh from text prompt using the configured generator.
         
         Args:
-            text_prompt: Text description
-            config: Generation configuration
+            text_prompt: Text description of the object
+            **kwargs: Additional configuration (e.g., resolution)
             
         Returns:
-            Mock mesh data
+            Dictionary with mesh data
         """
-        # Generate mock vertices and faces based on the text prompt
-        # This simulates what TripoSR would produce
-        
-        # Simple heuristic: generate different shapes based on keywords
-        vertices, faces = self._generate_mock_geometry(text_prompt, config["resolution"])
-        
-        return {
-            "vertices": vertices.tolist(),
-            "faces": faces.tolist(),
-            "normals": [],  # Would be calculated from vertices
-            "textures": [],  # Would be generated based on material description
-            "metadata": {
-                "prompt": text_prompt,
-                "generated_at": datetime.now().isoformat(),
-                "config": config,
-                "vertex_count": len(vertices),
-                "face_count": len(faces)
-            }
-        }
+        config = {**self.default_config, **kwargs}
+        mesh_data = self.mesh_generator.generate(text_prompt)
+        return self._process_mesh_data(mesh_data, text_prompt)
     
-    def _generate_mock_geometry(self, prompt: str, resolution: int) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Generate mock 3D geometry based on text prompt.
+    def _CubeGenerator(self) -> MeshGenerator:
+        """Cube mesh generator."""
+        class CubeGenerator(MeshGenerator):
+            def generate(self, prompt: str) -> Dict[str, Any]:
+                return self._generate_cube(self.resolution)
+        return CubeGenerator()
+
+    def _SphereGenerator(self) -> MeshGenerator:
+        """Sphere mesh generator."""
+        class SphereGenerator(MeshGenerator):
+            def generate(self, prompt: str) -> Dict[str, Any]:
+                return self._generate_sphere(self.resolution)
+        return SphereGenerator()
+
+    def _CylinderGenerator(self) -> MeshGenerator:
+        """Cylinder mesh generator."""
+        class CylinderGenerator(MeshGenerator):
+            def generate(self, prompt: str) -> Dict[str, Any]:
+                return self._generate_cylinder(self.resolution)
+        return CylinderGenerator()
+
+    def _ConicalGenerator(self) -> MeshGenerator:
+        """Cone mesh generator."""
+        class ConicalGenerator(MeshGenerator):
+            def generate(self, prompt: str) -> Dict[str, Any]:
+                return self._generate_cone(self.resolution)
+        return ConicalGenerator()
+    
+    def _generate_cube(self, resolution: int) -> Dict[str, Any]:
+        """Generate cube mesh data.
         
-        Args:
-            prompt: Text description of desired object
-            resolution: Mesh resolution parameter
-            
         Returns:
-            Tuple of vertices (Nx3) and faces (Mx3) arrays
+            Dictionary with vertices, faces, and metadata.
         """
-        prompt_lower = prompt.lower()
-        
-        # Simple shape detection based on keywords
-        if any(word in prompt_lower for word in ["box", "cube", "rectangular", "cuboid"]):
-            return self._generate_cube(resolution)
-        elif any(word in prompt_lower for word in ["sphere", "ball", "round"]):
-            return self._generate_sphere(resolution)
-        elif any(word in prompt_lower for word in ["cylinder", "tube", "pipe"]):
-            return self._generate_cylinder(resolution)
-        elif any(word in prompt_lower for word in ["cone", "pyramid"]):
-            return self._generate_cone(resolution)
-        else:
-            # Default to cube for unknown shapes
-            return self._generate_cube(resolution)
-    
-    def _generate_cube(self, resolution: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Generate a cube mesh"""
-        # Simple cube vertices and faces
         vertices = np.array([
             [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],  # Bottom face
             [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]       # Top face
@@ -184,11 +191,17 @@ class TripoSRService:
             [0, 3, 7], [0, 7, 4]   # Left
         ], dtype=np.int32)
         
-        return vertices, faces
+        return {
+            "vertices": vertices,
+            "faces": faces
+        }
     
-    def _generate_sphere(self, resolution: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Generate a sphere mesh using icosphere subdivision"""
-        # Simple icosahedron as starting point
+    def _generate_sphere(self, resolution: int) -> Dict[str, Any]:
+        """Generate sphere mesh data.
+        
+        Returns:
+            Dictionary with vertices, faces, and metadata.
+        """
         t = (1.0 + np.sqrt(5.0)) / 2.0
         vertices = np.array([
             [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
@@ -203,13 +216,19 @@ class TripoSRService:
             [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
         ], dtype=np.int32)
         
-        # Normalize vertices to unit sphere
         vertices = vertices / np.linalg.norm(vertices, axis=1)[:, np.newaxis]
         
-        return vertices, faces
+        return {
+            "vertices": vertices,
+            "faces": faces
+        }
     
-    def _generate_cylinder(self, resolution: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Generate a cylinder mesh"""
+    def _generate_cylinder(self, resolution: int) -> Dict[str, Any]:
+        """Generate cylinder mesh data.
+        
+        Returns:
+            Dictionary with vertices, faces, and metadata.
+        """
         vertices = []
         faces = []
         
@@ -249,10 +268,17 @@ class TripoSRService:
         
         faces = np.array(faces, dtype=np.int32)
         
-        return vertices, faces
+        return {
+            "vertices": vertices,
+            "faces": faces
+        }
     
-    def _generate_cone(self, resolution: int) -> Tuple[np.ndarray, np.ndarray]:
-        """Generate a cone mesh"""
+    def _generate_cone(self, resolution: int) -> Dict[str, Any]:
+        """Generate cone mesh data.
+        
+        Returns:
+            Dictionary with vertices, faces, and metadata.
+        """
         vertices = []
         faces = []
         
@@ -282,7 +308,10 @@ class TripoSRService:
         
         faces = np.array(faces, dtype=np.int32)
         
-        return vertices, faces
+        return {
+            "vertices": vertices,
+            "faces": faces
+        }
     
     def _process_mesh_data(self, mesh_data: Dict[str, Any], prompt: str) -> Dict[str, Any]:
         """
